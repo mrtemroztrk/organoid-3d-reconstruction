@@ -83,7 +83,7 @@ class CellposeDetector:
 
         self.p = params
         self.acq = acq
-        self.diameter_px = params.expected_diameter_um / acq.px_um
+        self.diameter_px = params.expected_diameter_px
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.model = models.CellposeModel(gpu=gpu)
@@ -137,7 +137,7 @@ class ClassicalDetector:
         rim = edge > thr
 
         # 4. close rims into filled discs
-        min_r = 0.5 * p.min_diameter_um / acq.px_um
+        min_r = 0.5 * p.min_diameter_px
         k = max(3, int(round(min_r)))
         rim = morphology.binary_closing(rim, morphology.disk(k))
         filled = ndi.binary_fill_holes(rim)
@@ -146,7 +146,7 @@ class ClassicalDetector:
 
         # 5. split touching organoids
         dist = ndi.distance_transform_edt(filled)
-        peak_sep = max(3, int(round(0.5 * p.expected_diameter_um / acq.px_um)))
+        peak_sep = max(3, int(round(0.5 * p.expected_diameter_px)))
         from skimage.feature import peak_local_max
         coords = peak_local_max(dist, min_distance=peak_sep, labels=filled,
                                 exclude_border=False)
@@ -178,8 +178,8 @@ def segment_stack(stack, params: Params, gpu: bool = True,
     """
     detector = build_detector(stack.acq, params, gpu=gpu)
     acq = stack.acq
-    min_r = 0.5 * params.min_diameter_um / acq.px_um
-    max_r = 0.5 * params.max_diameter_um / acq.px_um
+    min_r = 0.5 * params.min_diameter_px
+    max_r = 0.5 * params.max_diameter_px
 
     zs = list(z_slice_range if z_slice_range is not None else range(stack.depth))
     zs = zs[:: params.z_step]

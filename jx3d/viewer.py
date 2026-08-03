@@ -41,7 +41,7 @@ def _encode_slices(volume: np.ndarray, quality: int = 72,
 def build_viewer(stack, organoids: list[Organoid], params: Params,
                  focus_profile: np.ndarray, substrate_slice: int,
                  output: str | Path, jpeg_quality: int = 72,
-                 progress=None) -> Path:
+                 dome=None, progress=None) -> Path:
     acq = stack.acq
     meta = {
         "dataset": stack.name,
@@ -49,13 +49,18 @@ def build_viewer(stack, organoids: list[Organoid], params: Params,
         "width": stack.width,
         "height": stack.height,
         "depth": stack.depth,
+        "calibrated": acq.calibrated,
         "px_um": acq.px_um,
         "z_um": acq.z_um,
+        "px_um_source": acq.px_um_source,
+        "z_um_source": acq.z_um_source,
+        "anisotropy": round(acq.anisotropy, 6),
         "n_theta": params.n_theta,
         "n_phi": params.n_phi,
         "substrate_slice": int(substrate_slice),
         "focus_profile": [round(float(v), 2) for v in focus_profile],
-        "depth_of_field_um": round(acq.depth_of_field_um, 1),
+        "depth_of_field_slices": round(acq.depth_of_field_slices, 2),
+        "dome": dome.to_dict() if dome is not None else None,
     }
     payload = {"meta": meta, "organoids": [o.to_dict() for o in organoids]}
 

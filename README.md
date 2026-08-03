@@ -4,9 +4,13 @@ Measure organoids grown in a Matrigel dome from an ordinary **brightfield**
 Z-stack — the kind a Keyence BZ-X produces by stepping the focus down through
 the sample. No confocal, no fluorescence, no optical sectioning.
 
-Output is a table of per-organoid measurements in micrometres, a 3D mesh, and a
-single-file interactive viewer that shows the reconstruction **on top of the raw
-photograph** so every number can be checked by eye.
+Output is a per-object feature matrix, a 3D mesh, and a single-file interactive
+viewer that shows the reconstruction **on top of the raw photograph** so every
+number can be checked by eye.
+
+Measurements are reported in **pixels and slice indices**. Micrometres are added
+only when a real calibration was recovered, and every calibrated value carries
+the source it came from — see [Units](#units).
 
 ![slicer](docs/slicer.gif)
 
@@ -19,6 +23,38 @@ models clipped at that plane. Both panels move together as you scrub through Z.*
 
 *99 organoids from one 119-slice stack, positioned and sized in micrometres.
 Colour is depth in the dome; the orange outline is the glass surface.*
+
+---
+
+## Units
+
+Every measurement is primarily in **pixels** (lateral) and **slice indices**
+(axial), because that is what the image files actually contain. Micrometres are
+emitted only when a scale was genuinely recovered — from the Keyence `.gci`, or
+from `--px-size` / `--z-step-um` — and each one records its provenance:
+
+```json
+"units": {
+  "primary": "pixels (lateral) and slice indices (axial)",
+  "calibrated": true,
+  "px_um": 3.7736,  "px_um_source": "keyence-lens-table",
+  "z_um": 10.0,     "z_um_source": "keyence-stack-pitch",
+  "anisotropy": 2.6499, "anisotropy_source": "calibration"
+}
+```
+
+On an uncalibrated stack the micrometre columns are **absent**, not estimated,
+and the pipeline says so on every run. A plausible-looking micrometre figure
+derived from a guessed pixel size is worse than no figure at all, because
+nothing downstream can tell the difference.
+
+Volumes are given as `volume_voxels`, where one voxel is `1 px × 1 px × 1 slice`.
+
+Note what the calibration sources mean here: the `.gci` records the *objective*,
+not the pixel size, so `keyence-lens-table` is a lookup against Keyence's
+documented BZ-X field of view — traceable, but not a measurement of this
+particular instrument. Override it with `--px-size` if you have a stage
+micrometer calibration.
 
 ---
 
@@ -127,11 +163,47 @@ default `--mode both` takes the union of the two and deduplicates.
 
 ---
 
+## The Matrigel dome
+
+Organoids grow inside a droplet of gel sitting on the well bottom, and how far
+each one sits from the droplet's outer surface is a real biological variable.
+That surface is measurable, not assumed.
+
+Where the curved gel/medium interface crosses the focal plane it refracts light
+and leaves a broad, high-texture band. Because the surface is curved, the band
+sits somewhere different on every slice — it moves outward as the focus descends
+towards the glass, tracing the widening cross-section of the droplet. Collected
+over all slices, those points lie *on* the dome surface, and a sphere is fitted
+to them by RANSAC consensus followed by Huber-weighted refinement.
+
+One detail matters more than it looks. The gel *ends* at the far side of the
+texture band, not at its brightest point — near the edge you are looking through
+a long slanted path of gel. Tracking the brightest point puts the surface inside
+the droplet and leaves 23% of the organoids apparently outside the gel they grew
+in. Tracking the band's outer edge encloses 99% of them:
+
+| interface definition | fit residual | organoids enclosed |
+|---|---|---|
+| brightest point of the band | 5.6 px | 77% |
+| **outer edge of the band** | **5.5 px** | **98.6%** |
+
+The residual barely moves — both are good sphere fits — which is exactly why the
+physical check is the one that decides. Every run validates the fit against it,
+and **a dome that fails to enclose the organoids is rejected and no clearance
+values are reported**, rather than shipping a confident-looking wrong surface.
+
+`dome_distance_px` is then measured from each organoid's *surface*: zero means
+touching the outside of the droplet, positive is inside the gel.
+
+---
+
 ## Pipeline
 
 ```
-1  load          calibration from the Keyence .gci (µm/px, µm/slice, objective)
+1  load          calibration from the Keyence .gci, with provenance
 2  focus profile edge energy per slice -> find the glass surface, exclude below it
+2b dome          interface band traced on every slice -> sphere fit -> validated
+                 against the organoids, rejected if it does not enclose them
 3  EDF           sharpest slice per pixel -> all-in-focus image + depth map
 4  detect        (a) one segmentation pass on the projection        [--mode edf]
                  (b) per-slice segmentation, consecutive slices linked
@@ -223,8 +295,9 @@ group file next to it — that is where the calibration is read from.
 | `qc_slices.png` | raw slices + measured outlines — position and size check |
 | `qc_focus.png` | focus profile, glass surface, organoid depth distribution |
 | `edf.png`, `edf_depth.png` | all-in-focus projection and its depth map |
-| `organoids.csv` | per-organoid measurements in µm |
-| `organoids.json` | same table plus full calibration and parameters |
+| `organoids.csv` | **per-object feature matrix**, one row per organoid |
+| `outlines_px.csv` | the measured r(θ) contour, one row per organoid |
+| `organoids.json` | same features plus calibration provenance and the dome fit |
 | `organoids.ply` | colour-coded 3D mesh (MeshLab, Blender, ParaView) |
 | `render_3d.png` | still renders, for when a browser is not available |
 
@@ -234,19 +307,31 @@ Still renders without a browser:
 ./.venv/bin/python render_3d.py output/4x_00009
 ```
 
-### Measurement columns
+### Feature matrix (`organoids.csv`)
+
+One row per object. Pixel and slice columns are always present; the micrometre
+block is appended only when the stack is calibrated.
 
 | column | meaning |
 |---|---|
-| `x_um, y_um, z_um` | position relative to the stack origin |
-| `diameter_um` | equivalent-circle diameter of the equatorial outline |
-| `volume_um3` | from the measured equatorial and axial radii |
-| `area_um2` | equatorial cross-section |
-| `circularity` | 4πA/P² — 1.0 is a perfect circle |
-| `focus_sharpness` | prominence of the focus peak (0–1). **The quality measure**: low means the object has no real focal plane |
-| `best_slice` | slice the outline was measured on (0-based) |
-| `n_slices` | slices over which the rim stays at least half as sharp as at its peak |
+| `oid` | object id, stable within a run |
 | `source` | `edf` or `slices` — which detector found it |
+| `x_px, y_px` | lateral position, pixels |
+| `z_slice` | depth of the focal plane, fractional slice index |
+| `best_slice` | integer slice the outline was measured on |
+| `diameter_px`, `radius_px` | equivalent-circle size of the equatorial outline |
+| `radius_z_slices` | axial semi-axis, in slices |
+| `area_px2` | equatorial cross-section, px² |
+| `volume_voxels` | ellipsoid volume; 1 voxel = 1 px × 1 px × 1 slice |
+| `circularity` | 4πA/P² — 1.0 is a perfect circle |
+| `focus_sharpness` | prominence of the focus peak, 0–1. **The quality measure**: low means the object has no real focal plane |
+| `n_slices` | slices over which the rim stays at least half as sharp as at its peak |
+| `dome_distance_px` | shortest gap from the organoid **surface** to the Matrigel interface. Positive = inside the gel. Empty if the dome fit was rejected |
+| `dome_surface_slice` | slice index of the dome surface directly above the organoid |
+| `x_um … volume_um3, dome_distance_um` | the same quantities in micrometres — **only when calibrated** |
+
+`outlines_px.csv` carries the full measured contour: `oid` followed by 48 radii
+in pixels, sampled at uniform angles from the object centre.
 
 ---
 
@@ -267,6 +352,7 @@ step with the rings sharpening and blurring in the image.
 | `S` | slice mode |
 | `P` | photo plane on/off |
 | `T` | top view — the microscope's own angle |
+| `D` | fitted Matrigel dome surface on/off |
 | `1 2 3` | side by side / 3D only / photo only |
 | `O` | hide overlays, raw photo only |
 | `Esc` | clear selection |

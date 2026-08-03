@@ -11,14 +11,15 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from . import dome as domemod
 from . import edf as edfmod
 from . import focus as focusmod
 from . import qc, viewer
 from .config import Params
 from .detect import Detection, _detections_from_labels, build_detector, segment_stack
 from .link import drop_substrate_tracks, link_tracks
-from .reconstruct import (Organoid, export_mesh, filter_organoids, measure_regions,
-                          measure_tracks, merge_sources)
+from .reconstruct import (Organoid, attach_dome, export_mesh, filter_organoids,
+                          measure_regions, measure_tracks, merge_sources)
 from .stack import ZStack, load_stack
 
 
@@ -44,6 +45,7 @@ class Result:
     substrate_slice: int
     outdir: Path
     focus_stack: edfmod.FocusStack | None = None
+    dome: domemod.Dome | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -55,7 +57,7 @@ def _cache_key(stack: ZStack, params: Params) -> dict:
         "detector": params.detector,
         "z_step": params.z_step,
         "shape": list(stack.data.shape),
-        "expected_diameter_um": params.expected_diameter_um,
+        "expected_diameter_px": params.expected_diameter_px,
         "files": len(stack.files),
     }
 
@@ -80,7 +82,8 @@ def _cache_save(outdir: Path, name: str, key: dict, arr: np.ndarray) -> None:
 
 def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
         gpu: bool = True, use_cache: bool = True, jpeg_quality: int = 72,
-        min_sharpness: float = 0.25, build_html: bool = True) -> Result:
+        min_sharpness: float = 0.25, build_html: bool = True,
+        calibration: dict | None = None) -> Result:
     params = params or Params()
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -90,6 +93,10 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
     _log("=" * 74)
     _log("[1/7] Loading Z-stack")
     stack = load_stack(folder)
+    for field, value in (calibration or {}).items():
+        setattr(stack.acq, field, value)
+        if field in ("px_um", "z_um"):
+            setattr(stack.acq, f"{field}_source", "user")
     key = _cache_key(stack, params)
     _log("  " + stack.describe().replace("\n", "\n  "))
     if stack.meta.get("source"):
@@ -107,6 +114,33 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
          f"  ->  NOT optical sectioning; depth comes from focus")
     np.save(outdir / "focus_profile.npy", profile)
     seg_range = range(0, z_limit)
+
+    # ----------------------------------------------- 2b. Matrigel dome surface
+    dome = None
+    if params.fit_dome:
+        _log("\n[2b]  Matrigel dome surface")
+        pts = domemod.ridge_points(stack.data, seg_range, sigma=params.dome_sigma,
+                                   x_min_frac=params.dome_x_min_frac,
+                                   threshold_k=params.dome_threshold_k,
+                                   progress=lambda n, t: _inline(_bar(n, t)))
+        sys.stdout.write("\n")
+        dome = domemod.fit(pts, stack.acq.anisotropy, substrate,
+                           stack.data.shape[1:])
+        if dome is None:
+            _log(f"  only {len(pts)} interface points found - no dome fitted")
+        else:
+            _log(f"  {dome.n_points} interface points, residual "
+                 f"{dome.residual_px:.1f} px (p90 {dome.residual_p90_px:.1f})")
+            _log(f"  contact radius {dome.contact_radius_px:.0f} px "
+                 f"(+/-{dome.spread_pct:.0f}% bootstrap), "
+                 f"height {dome.height_slices:.0f} slices, "
+                 f"apex at slice {dome.apex_slice:.0f}")
+            if dome.covers_field:
+                _log("  droplet is wider than the field of view - the surface is "
+                     "clipped to the imaged region")
+            if stack.acq.calibrated:
+                _log(f"  = {dome.contact_radius_px * stack.acq.px_um * 2 / 1000:.2f} mm "
+                     f"across, {dome.height_slices * stack.acq.z_um:.0f} µm tall")
 
     edf_orgs: list[Organoid] = []
     slice_orgs: list[Organoid] = []
@@ -147,8 +181,8 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
             if use_cache:
                 _cache_save(outdir, "edflabels", key, lab.astype(np.int16))
         lab = lab.astype(np.int32)
-        min_r = 0.5 * params.min_diameter_um / stack.acq.px_um
-        max_r = 0.5 * params.max_diameter_um / stack.acq.px_um
+        min_r = 0.5 * params.min_diameter_px
+        max_r = 0.5 * params.max_diameter_px
         edf_dets = _detections_from_labels(lab, 0, params, min_r, max_r)
         _log(f"  {lab.max()} objects found, {len(edf_dets)} passed the size/shape "
              f"filter")
@@ -170,8 +204,8 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
         if labels is not None:
             labels = labels.astype(np.int32)
             _log("  loaded from cache")
-            min_r = 0.5 * params.min_diameter_um / stack.acq.px_um
-            max_r = 0.5 * params.max_diameter_um / stack.acq.px_um
+            min_r = 0.5 * params.min_diameter_px
+            max_r = 0.5 * params.max_diameter_px
             per_slice: list[list[Detection]] = [[] for _ in range(stack.depth)]
             for z in range(stack.depth):
                 if labels[z].max() > 0:
@@ -216,30 +250,51 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
              f"(out-of-focus ghosts / debris)")
     for i, o in enumerate(organoids, start=1):
         o.oid = i
+    dome = domemod.validate(dome, organoids)
+    if dome is not None and not dome.reliable:
+        _log(f"  !! dome fit rejected: it encloses only "
+             f"{100 * dome.encloses_frac:.0f}% of the organoids, and organoids "
+             f"grow inside the gel. Clearance values are not reported.")
+        dome = None
+    attach_dome(organoids, dome, stack.acq)
     _log(f"  → {len(organoids)} organoids")
 
     if not organoids:
         _log("\n!! No organoids found. Lower --min-sharpness, or widen the size "
              "range with --min-diameter / --max-diameter.")
-        return Result(stack, organoids, profile, substrate, outdir, fstack)
+        return Result(stack, organoids, profile, substrate, outdir, fstack, dome)
 
-    d = np.array([o.diameter_um for o in organoids])
-    z = np.array([o.z_um for o in organoids])
+    d = np.array([o.diameter_px for o in organoids])
+    z = np.array([o.z_slice for o in organoids])
     by_src = {}
     for o in organoids:
         by_src[o.source] = by_src.get(o.source, 0) + 1
-    _log(f"  diameter : median {np.median(d):.0f} µm "
-         f"(quartiles {np.percentile(d, 25):.0f} / {np.percentile(d, 75):.0f}, "
-         f"max {d.max():.0f})")
-    _log(f"  depth    : {z.min():.0f} - {z.max():.0f} µm (median {np.median(z):.0f})")
-    _log(f"  volume   : {sum(o.volume_um3 for o in organoids) / 1e9:.3f} µl total")
+    _log(f"  diameter : median {np.median(d):.1f} px "
+         f"(quartiles {np.percentile(d, 25):.1f} / {np.percentile(d, 75):.1f}, "
+         f"max {d.max():.1f})")
+    _log(f"  depth    : slices {z.min():.1f} - {z.max():.1f} (median {np.median(z):.1f})")
+    _log(f"  volume   : {sum(o.volume_voxels for o in organoids) / 1e6:.2f} Mvoxel total")
+    if dome is not None:
+        gap = np.array([o.dome_distance_px for o in organoids if o.dome_distance_px is not None])
+        if gap.size:
+            _log(f"  dome gap : median {np.median(gap):.0f} px "
+                 f"(min {gap.min():.0f}, max {gap.max():.0f})"
+                 + (f"  outside the droplet: {(gap < 0).sum()}" if (gap < 0).any() else ""))
+    if stack.acq.calibrated:
+        du = np.array([o.diameter_um for o in organoids])
+        _log(f"  calibrated: diameter median {np.median(du):.0f} µm, "
+             f"total volume {sum(o.volume_um3 for o in organoids) / 1e9:.3f} µl "
+             f"[{stack.acq.px_um_source} / {stack.acq.z_um_source}]")
+    else:
+        _log("  NOT CALIBRATED - no micrometre values are reported")
     _log(f"  source   : " + ", ".join(f"{k}={v}" for k, v in sorted(by_src.items())))
 
     # -------------------------------------------------------------- 7. output
     _log("\n[7/7] Outputs")
-    _write_tables(organoids, stack, params, substrate, outdir)
-    export_mesh(organoids, params, str(outdir / "organoids.ply"))
-    _log("  organoids.ply")
+    _write_tables(organoids, stack, params, substrate, outdir, dome)
+    _, mesh_unit = export_mesh(organoids, params, str(outdir / "organoids.ply"),
+                               stack.acq)
+    _log(f"  organoids.ply    (coordinates in {mesh_unit})")
     qc.montage(stack, organoids, params, outdir / "qc_slices.png")
     _log("  qc_slices.png    <- raw slices + measured outlines")
     if fstack is not None:
@@ -251,35 +306,75 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
 
     if build_html:
         html = viewer.build_viewer(stack, organoids, params, profile, substrate,
-                                   outdir / "viewer.html", jpeg_quality=jpeg_quality,
+                                   outdir / "viewer.html", jpeg_quality=jpeg_quality, dome=dome,
                                    progress=lambda n, t: _inline(f"viewer {_bar(n, t)}"))
         sys.stdout.write("\n")
         _log(f"  viewer.html      ({html.stat().st_size / 1e6:.1f} MB, single file)")
 
     _log(f"\nDone in {time.time() - t_start:.1f} s")
     _log("=" * 74)
-    return Result(stack, organoids, profile, substrate, outdir, fstack)
+    return Result(stack, organoids, profile, substrate, outdir, fstack, dome)
 
 
 def _write_tables(organoids: list[Organoid], stack: ZStack, params: Params,
-                  substrate: int, outdir: Path) -> None:
+                  substrate: int, outdir: Path, dome=None) -> None:
+    """Write the per-object feature matrix.
+
+    Pixel and slice columns come first because they are the measurement.
+    Micrometre columns are appended only when the stack carries a real
+    calibration; on an uncalibrated stack they are absent entirely rather than
+    present and wrong.
+    """
     rows = [o.to_dict() for o in organoids]
+    acq = stack.acq
 
     (outdir / "organoids.json").write_text(json.dumps({
         "dataset": stack.name,
-        "acquisition": stack.acq.to_dict(),
+        "units": {
+            "primary": "pixels (lateral) and slice indices (axial)",
+            "calibrated": acq.calibrated,
+            "px_um": acq.px_um,
+            "px_um_source": acq.px_um_source,
+            "z_um": acq.z_um,
+            "z_um_source": acq.z_um_source,
+            "anisotropy": round(acq.anisotropy, 4),
+            "anisotropy_source": acq.anisotropy_source,
+            "volume_voxels_definition": "1 voxel = 1 px * 1 px * 1 slice",
+        },
+        "acquisition": acq.to_dict(),
         "params": params.to_dict(),
         "substrate_slice": int(substrate),
+        "dome": dome.to_dict() if dome is not None else None,
         "n_organoids": len(organoids),
         "organoids": rows,
     }, indent=2), encoding="utf-8")
 
-    cols = ["oid", "x_um", "y_um", "z_um", "diameter_um", "radius_um", "radius_z_um",
-            "volume_um3", "area_um2", "circularity", "focus_sharpness",
-            "best_slice", "n_slices", "source", "cx_px", "cy_px", "z_slice"]
+    # --- feature matrix: one row per object ---
+    px_cols = [
+        "oid", "source",
+        "x_px", "y_px", "z_slice", "best_slice",
+        "diameter_px", "radius_px", "radius_z_slices",
+        "area_px2", "volume_voxels",
+        "circularity", "focus_sharpness", "n_slices",
+        "dome_distance_px", "dome_surface_slice",
+    ]
+    um_cols = ["x_um", "y_um", "z_um", "diameter_um", "radius_um", "radius_z_um",
+               "area_um2", "volume_um3", "dome_distance_um"]
+    cols = px_cols + (um_cols if acq.calibrated else [])
+
     with (outdir / "organoids.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
 
-    _log(f"  organoids.csv / organoids.json  ({len(rows)} rows)")
+    # --- the r(theta) outlines, one row per object ---
+    with (outdir / "outlines_px.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["oid"] + [f"r{i:02d}_px" for i in range(params.n_theta)])
+        for o in organoids:
+            w.writerow([o.oid] + [round(v, 3) for v in o.radial_profile_px])
+
+    unit_note = "px + µm" if acq.calibrated else "px only (uncalibrated)"
+    _log(f"  organoids.csv    ({len(rows)} rows x {len(cols)} features, {unit_note})")
+    _log(f"  outlines_px.csv  (r(theta) contour, {params.n_theta} angles per object)")
+    _log("  organoids.json   (features + calibration provenance + dome fit)")

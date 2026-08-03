@@ -31,7 +31,8 @@ from render_3d import _box_actor, _mesh_actor, _polydata
 class SlicerScene:
     """Reusable VTK scene; only the texture and the clip plane move per frame."""
 
-    def __init__(self, ply: Path, dims, size=(760, 620)):
+    def __init__(self, ply: Path, dims, size=(760, 620), dome=None,
+                 scale: float = 1.0):
         self.dims = dims
         self.ren = vtk.vtkRenderer()
         self.ren.SetBackground(0.031, 0.043, 0.070)
@@ -44,6 +45,9 @@ class SlicerScene:
         self.mesh.GetMapper().AddClippingPlane(self.clip)
         self.ren.AddActor(self.mesh)
         self.ren.AddActor(_box_actor(dims))
+        from render_3d import _dome_actor
+        for a in _dome_actor(dome, dims, scale):
+            self.ren.AddActor(a)
 
         # textured plane carrying the raw slice
         x, y, _ = dims
@@ -115,8 +119,9 @@ class SlicerScene:
 class OrbitScene:
     """Same scene, camera flying around it — one frame per azimuth step."""
 
-    def __init__(self, ply: Path, dims, substrate_um: float, size=(900, 700)):
-        from render_3d import _substrate_actor
+    def __init__(self, ply: Path, dims, substrate_um: float, size=(900, 700),
+                 dome=None, scale: float = 1.0):
+        from render_3d import _dome_actor, _substrate_actor
 
         self.dims = dims
         self.ren = vtk.vtkRenderer()
@@ -126,6 +131,8 @@ class OrbitScene:
         self.ren.AddActor(_mesh_actor(ply))
         self.ren.AddActor(_box_actor(dims))
         for a in _substrate_actor(dims, substrate_um, filled=True):
+            self.ren.AddActor(a)
+        for a in _dome_actor(dome, dims, scale):
             self.ren.AddActor(a)
 
         self.win = vtk.vtkRenderWindow()
@@ -235,22 +242,21 @@ def _focus_gif(stack, organoids, params, docs, imageio, n_frames,
     from jx3d.reconstruct import _band_from_contour
 
     # a big, well-isolated, confidently-focused organoid
-    cand = [o for o in organoids if o.diameter_um > 120 and o.focus_sharpness > 0.5]
+    cand = [o for o in organoids if o.diameter_px > 30 and o.focus_sharpness > 0.5]
     o = max(cand or organoids, key=lambda x: x.focus_sharpness)
 
-    acq = stack.acq
     theta = np.linspace(0, 2 * np.pi, params.n_theta, endpoint=False)
-    r_px = np.asarray(o.radial_profile_um) / acq.px_um
-    poly = np.stack([o.cx_px + r_px * np.cos(theta),
-                     o.cy_px + r_px * np.sin(theta)], axis=1).astype(np.float32)
+    r_px = np.asarray(o.radial_profile_px)
+    poly = np.stack([o.x_px + r_px * np.cos(theta),
+                     o.y_px + r_px * np.sin(theta)], axis=1).astype(np.float32)
 
     mask = np.zeros(stack.data.shape[1:], dtype=np.uint8)
     cv2.fillPoly(mask, [poly.astype(np.int32)], 1)
     band = contour_band(mask, params.focus_band_px)
 
     half = crop_px // 2
-    x0 = int(np.clip(o.cx_px - half, 0, stack.width - crop_px))
-    y0 = int(np.clip(o.cy_px - half, 0, stack.height - crop_px))
+    x0 = int(np.clip(o.x_px - half, 0, stack.width - crop_px))
+    y0 = int(np.clip(o.y_px - half, 0, stack.height - crop_px))
 
     z_lo = max(0, o.best_slice - 26)
     z_hi = min(stack.depth, o.best_slice + 27)
@@ -269,8 +275,8 @@ def _focus_gif(stack, organoids, params, docs, imageio, n_frames,
             pts = ((poly - [x0, y0]) * k).astype(np.int32).reshape(-1, 1, 2)
             cv2.polylines(img, [pts], True, (60, 230, 255), 2, cv2.LINE_AA)
 
-        img = _label(img, f"organoid #{o.oid} · Z{int(z) + 1:03d}"
-                          f"  ({int(z) * acq.z_um:.0f} µm)",
+        img = _label(img, f"organoid #{o.oid} · {o.diameter_px:.0f} px across"
+                          f" · slice Z{int(z) + 1:03d}",
                      "sharp rim only near its own equator")
         panel = _curve_panel(curve, int(z), o.z_slice, z_lo,
                              panel_w - panel_w // 2, panel_w // 2)
@@ -279,7 +285,7 @@ def _focus_gif(stack, organoids, params, docs, imageio, n_frames,
     _save_gif(docs / "focus.gif", frames, 0.12, palettesize=64)
 
 
-def _edf_gif(stack, params, docs, imageio, prof, meta, acq,
+def _edf_gif(stack, params, docs, imageio, prof, meta,
              imageio_frames: int = 28, width: int = 840) -> None:
     """Left: slices sweeping. Right: the all-in-focus image building up."""
     from jx3d.focus import tenengrad
@@ -308,7 +314,7 @@ def _edf_gif(stack, params, docs, imageio, prof, meta, acq,
                           interpolation=cv2.INTER_AREA)
         right = cv2.resize(cv2.cvtColor(edf, cv2.COLOR_GRAY2BGR), (pane, ph),
                            interpolation=cv2.INTER_AREA)
-        left = _label(left, f"raw slice Z{z + 1:03d}  ({z * acq['z_um']:.0f} µm)",
+        left = _label(left, f"raw slice Z{z + 1:03d}",
                       "most organoids here are out of focus")
         right = _label(right, "all-in-focus projection, building up",
                        "sharpest slice per pixel — every organoid crisp at once")
@@ -336,7 +342,10 @@ def main(argv=None) -> int:
     docs.mkdir(parents=True, exist_ok=True)
 
     meta = json.loads((outdir / "organoids.json").read_text())
-    acq = meta["acquisition"]
+    units = meta["units"]
+    aniso = units["anisotropy"]
+    scale = units["px_um"] if units["calibrated"] else 1.0
+    CAL = units["calibrated"]
     params = Params(**{k: v for k, v in meta["params"].items()
                        if k in Params.__dataclass_fields__})
 
@@ -349,14 +358,15 @@ def main(argv=None) -> int:
         o.z_extent_slices = tuple(o.z_extent_slices)
 
     prof = np.load(outdir / "focus_profile.npy")
-    dims = (stack.width * acq["px_um"], stack.height * acq["px_um"],
-            len(prof) * acq["z_um"])
+    dims = (stack.width * scale, stack.height * scale,
+            len(prof) * aniso * scale)
+    dome = meta.get("dome")
 
     lo = min(o.best_slice for o in organoids)
     hi = max(o.best_slice for o in organoids)
     zs = np.linspace(lo, hi, a.frames).round().astype(int)
 
-    scene = SlicerScene(outdir / "organoids.ply", dims)
+    scene = SlicerScene(outdir / "organoids.ply", dims, dome=dome, scale=scale)
 
     pane_w = a.width // 2
     frames = []
@@ -367,11 +377,13 @@ def main(argv=None) -> int:
         n_focus = sum(1 for o in organoids if abs(o.best_slice - int(z)) <= 1)
         left = cv2.resize(left, (pane_w, int(left.shape[0] * pane_w / left.shape[1])),
                           interpolation=cv2.INTER_AREA)
-        left = _label(left, f"Raw slice Z{z + 1:03d}  ({z * acq['z_um']:.0f} um)",
+        zlab = (f"Raw slice Z{z + 1:03d}"
+                + (f"  ({z * units['z_um']:.0f} um deep)" if CAL else ""))
+        left = _label(left, zlab,
                       f"solid = measured here ({n_focus})   faint = model cross-section")
 
         right = scene.frame(cv2.cvtColor(stack.data[int(z)], cv2.COLOR_GRAY2BGR),
-                            float(z) * acq["z_um"])
+                            float(z) * aniso * scale)
         right = cv2.resize(right, (pane_w, left.shape[0]), interpolation=cv2.INTER_AREA)
         right = _label(right, "3D reconstruction, clipped at the same plane",
                        "the photograph sits at its own depth inside the volume")
@@ -387,23 +399,25 @@ def main(argv=None) -> int:
     cv2.imwrite(str(docs / "slicer.png"), cv2.cvtColor(mid, cv2.COLOR_RGB2BGR))
 
     # ------------------------------------------------------------ orbit.gif
-    substrate_um = meta["substrate_slice"] * acq["z_um"]
-    orbit = OrbitScene(outdir / "organoids.ply", dims, substrate_um)
+    substrate_um = meta["substrate_slice"] * aniso * scale
+    orbit = OrbitScene(outdir / "organoids.ply", dims, substrate_um,
+                       dome=dome, scale=scale)
     frames = []
-    n_orb = 36
+    n_orb = 40
     for i in range(n_orb):
         az = 360.0 * i / n_orb
         f = orbit.frame(az, 22.0)
-        ow = 900
+        ow = 820
         f = cv2.resize(f, (ow, int(f.shape[0] * ow / f.shape[1])),
                        interpolation=cv2.INTER_AREA)
-        f = _label(f, f"{len(organoids)} organoids, {acq['px_um']:.2f} µm/px, "
-                      f"{acq['z_um']:.0f} µm/slice",
-                   "colour = depth in the dome (blue: top, red: near the glass)")
+        cal_txt = (f"{units['px_um']:.2f} µm/px · {units['z_um']:.0f} µm/slice"
+                   if CAL else "uncalibrated — pixels and slices")
+        f = _label(f, f"{len(organoids)} organoids · {cal_txt}",
+                   "colour = depth in the dome · translucent shell = fitted Matrigel surface")
         frames.append(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
         print(f"\r  orbit {i + 1}/{n_orb}", end="", flush=True)
     print()
-    _save_gif(docs / "orbit.gif", frames, 0.09, palettesize=128)
+    _save_gif(docs / "orbit.gif", frames, 0.20, palettesize=112)
 
     # ------------------------------------------------------------- focus.gif
     # The core idea, on one organoid: its rim is crisp only near its own
@@ -411,7 +425,7 @@ def main(argv=None) -> int:
     _focus_gif(stack, organoids, params, docs, imageio, a.frames)
 
     # --------------------------------------------------------------- edf.gif
-    _edf_gif(stack, params, docs, imageio, prof, meta, acq, imageio_frames=28)
+    _edf_gif(stack, params, docs, imageio, prof, meta, imageio_frames=28)
 
     # copy the static figures the pipeline already produced
     for name, dest in [("qc_edf.png", "recall.png"),

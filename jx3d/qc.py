@@ -27,26 +27,25 @@ def _draw_slice(stack, organoids: list[Organoid], z: int, params,
     acq = stack.acq
     rgb = cv2.cvtColor(stack.data[z], cv2.COLOR_GRAY2BGR)
     fs = 0.55 * label_scale
-    z_um = z * acq.z_um
     n_focus = 0
 
     theta = np.linspace(0, 2 * np.pi, params.n_theta, endpoint=False)
     cos_t, sin_t = np.cos(theta), np.sin(theta)
 
     for o in organoids:
-        dz = z_um - o.z_um
-        if o.radius_z_um <= 0 or abs(dz) >= o.radius_z_um:
+        dz = z - o.z_slice
+        if o.radius_z_slices <= 0 or abs(dz) >= o.radius_z_slices:
             continue
-        s = float(np.sqrt(1.0 - (dz / o.radius_z_um) ** 2))
-        r = np.asarray(o.radial_profile_um) * s / acq.px_um
-        pts = np.stack([o.cx_px + r * cos_t, o.cy_px + r * sin_t], axis=1)
+        s = float(np.sqrt(1.0 - (dz / o.radius_z_slices) ** 2))
+        r = np.asarray(o.radial_profile_px) * s
+        pts = np.stack([o.x_px + r * cos_t, o.y_px + r * sin_t], axis=1)
         pts = pts.astype(np.int32).reshape(-1, 1, 2)
 
         in_focus = abs(o.best_slice - z) <= 1
         if in_focus:
             n_focus += 1
             cv2.polylines(rgb, [pts], True, (60, 230, 255), lw, cv2.LINE_AA)
-            cv2.putText(rgb, str(o.oid), (int(o.cx_px) - 6, int(o.cy_px) + 4),
+            cv2.putText(rgb, str(o.oid), (int(o.x_px) - 6, int(o.y_px) + 4),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4 * label_scale, (60, 230, 255),
                         max(1, lw - 1), cv2.LINE_AA)
         else:
@@ -56,7 +55,9 @@ def _draw_slice(stack, organoids: list[Organoid], z: int, params,
             cv2.polylines(overlay, [pts], True, (200, 120, 60), lw_cross, cv2.LINE_AA)
             cv2.addWeighted(overlay, cross_alpha, rgb, 1.0 - cross_alpha, 0, rgb)
 
-    label = f"Z{z + 1:03d}  ({z * acq.z_um:.0f} um)   in focus: {n_focus}"
+    label = f"Z{z + 1:03d}   in focus: {n_focus}"
+    if acq.calibrated:
+        label += f"   ({z * acq.z_um:.0f} um deep)"
     bh = int(26 * label_scale)
     cv2.rectangle(rgb, (0, 0), (rgb.shape[1], bh), (20, 20, 20), -1)
     cv2.putText(rgb, label, (8, int(18 * label_scale)), cv2.FONT_HERSHEY_SIMPLEX, fs,
@@ -105,8 +106,8 @@ def edf_overlay(edf: np.ndarray, organoids: list[Organoid], acq, params,
     cos_t, sin_t = np.cos(theta), np.sin(theta)
 
     for o in organoids:
-        r = np.asarray(o.radial_profile_um) / acq.px_um
-        pts = np.stack([o.cx_px + r * cos_t, o.cy_px + r * sin_t], axis=1)
+        r = np.asarray(o.radial_profile_px)
+        pts = np.stack([o.x_px + r * cos_t, o.y_px + r * sin_t], axis=1)
         cv2.polylines(rgb, [pts.astype(np.int32).reshape(-1, 1, 2)], True,
                       (60, 230, 255), 2, cv2.LINE_AA)
 

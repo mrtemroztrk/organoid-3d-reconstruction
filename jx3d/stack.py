@@ -41,16 +41,20 @@ class ZStack:
 
     def describe(self) -> str:
         a = self.acq
-        return (
-            f"{self.name}: {self.depth} slices  {self.width}x{self.height} px\n"
-            f"  objective {a.objective} (NA {a.na})\n"
-            f"  lateral   {a.px_um:.4f} um/px  -> field {self.width * a.px_um / 1000:.2f}"
-            f" x {self.height * a.px_um / 1000:.2f} mm\n"
-            f"  axial     {a.z_um:.2f} um/slice -> depth {self.depth * a.z_um / 1000:.2f} mm"
-            f"  (anisotropy {a.anisotropy:.2f}x)\n"
-            f"  depth of field ~{a.depth_of_field_um:.0f} um "
-            f"(~{a.depth_of_field_um / a.z_um:.1f} slices)"
-        )
+        lines = [f"{self.name}: {self.depth} slices  {self.width}x{self.height} px",
+                 f"  objective {a.objective}" + (f" (NA {a.na})" if a.na else "")]
+        for ln in a.describe_scale().splitlines():
+            lines.append("  " + ln)
+        if a.calibrated:
+            lines.append(f"  field     {self.width * a.px_um / 1000:.2f}"
+                         f" x {self.height * a.px_um / 1000:.2f} mm"
+                         f"   depth {self.depth * a.z_um / 1000:.2f} mm")
+        lines.append(f"  anisotropy {a.anisotropy:.2f} slice/px ({a.anisotropy_source})")
+        dof = a.depth_of_field_um
+        lines.append(f"  depth of field ~{a.depth_of_field_slices:.1f} slices"
+                     + (f" (~{dof:.0f} um)" if dof else "")
+                     + f"  [{a.depth_of_field_source}]")
+        return "\n".join(lines)
 
 
 def load_stack(folder: str | Path, channel: str | None = None) -> ZStack:

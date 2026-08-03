@@ -34,41 +34,63 @@ from .link import Track
 
 @dataclass
 class Organoid:
+    """One measured organoid.
+
+    Pixel/slice fields are the measurement. The micrometre fields are a
+    convenience conversion and are ``None`` whenever the stack is uncalibrated
+    -- they are never filled in from a guessed scale.
+    """
+
     oid: int
 
-    # position, in micrometres from the stack origin (x, y, depth)
-    x_um: float
-    y_um: float
-    z_um: float
-
-    # same, in native image coordinates
-    cx_px: float
-    cy_px: float
+    # --- position, image coordinates (the measurement) ---
+    x_px: float
+    y_px: float
     z_slice: float          # fractional, sub-slice interpolated
+    best_slice: int         # integer slice the outline was measured on
 
-    # size
-    radius_um: float        # equivalent-circle radius of the equatorial outline
-    diameter_um: float
-    radius_z_um: float      # semi-axis along Z
-    volume_um3: float
-    area_um2: float         # equatorial cross-section
+    # --- size, lateral pixels and slices (the measurement) ---
+    radius_px: float        # equivalent-circle radius of the equatorial outline
+    diameter_px: float
+    radius_z_slices: float  # semi-axis along Z, in slices
+    area_px2: float         # equatorial cross-section
+    volume_voxels: float    # ellipsoid volume, in px*px*slice units
 
-    # shape / quality
+    # --- shape / quality ---
     circularity: float
     focus_sharpness: float  # peak prominence of the focus curve, 0..1
     n_slices: int
     z_extent_slices: tuple[int, int]
+    source: str             # 'edf' or 'slices'
 
-    # geometry: equatorial outline sampled at n_theta angles, in micrometres
-    radial_profile_um: list[float]
+    # --- geometry: equatorial outline sampled at n_theta angles, in pixels ---
+    radial_profile_px: list[float]
 
-    best_slice: int         # integer slice the outline was measured on
-    source: str = "edf"     # which detector found it: 'edf' or 'slices'
+    # --- distance to the Matrigel dome surface (None if no dome was fitted) ---
+    dome_distance_px: float | None = None
+    """Shortest distance from the organoid surface to the gel/medium interface,
+    in lateral pixels. Positive = inside the droplet."""
+    dome_surface_slice: float | None = None
+    """Slice index where the dome surface sits directly above this organoid."""
+
+    # --- calibrated conversions; None when the stack has no known scale ---
+    x_um: float | None = None
+    y_um: float | None = None
+    z_um: float | None = None
+    radius_um: float | None = None
+    diameter_um: float | None = None
+    radius_z_um: float | None = None
+    area_um2: float | None = None
+    volume_um3: float | None = None
+    dome_distance_um: float | None = None
+    radial_profile_um: list[float] | None = None
 
     def to_dict(self) -> dict:
-        d = {k: v for k, v in self.__dict__.items()}
+        d = dict(self.__dict__)
         d["z_extent_slices"] = list(self.z_extent_slices)
-        d["radial_profile_um"] = [round(float(r), 3) for r in self.radial_profile_um]
+        d["radial_profile_px"] = [round(float(r), 3) for r in self.radial_profile_px]
+        if self.radial_profile_um is not None:
+            d["radial_profile_um"] = [round(float(r), 3) for r in self.radial_profile_um]
         for k, v in d.items():
             if isinstance(v, float):
                 d[k] = round(v, 4)
@@ -111,7 +133,7 @@ def measure_tracks(stack, tracks: list[Track], params: Params,
     z_limit = stack.depth if z_max is None else max(3, min(stack.depth, z_max))
     out: list[Organoid] = []
 
-    dof_slices = acq.depth_of_field_um / acq.z_um
+    dof_slices = acq.depth_of_field_slices
     # Window wide enough to contain the focus peak, narrow enough to stay cheap.
     half_window = max(6, int(round(3.0 * dof_slices)))
     # Two focal planes closer than the depth of field are not separable.
@@ -174,7 +196,7 @@ def measure_regions(stack, detections, params: Params, z_max: int | None = None,
     acq: Acquisition = stack.acq
     vol = stack.data
     z_limit = stack.depth if z_max is None else max(3, min(stack.depth, z_max))
-    dof_slices = acq.depth_of_field_um / acq.z_um
+    dof_slices = acq.depth_of_field_slices
     min_sep = max(2.0, dof_slices)
 
     out: list[Organoid] = []
@@ -202,31 +224,71 @@ def measure_regions(stack, detections, params: Params, z_max: int | None = None,
 def _organoid_at(det, z_focus: float, prominence: float, acq: Acquisition,
                  params: Params, n_slices: int, z_extent,
                  source: str = "edf") -> Organoid:
+    """Assemble one measurement, in pixels and slices."""
     r_prof_px = _radial_profile(det.contour, det.cx, det.cy, params.n_theta)
     r_eq_px = float(np.sqrt(det.area_px / np.pi))
-    r_eq_um = r_eq_px * acq.px_um
-    rz_um = r_eq_um * params.axial_ratio
-    return Organoid(
+
+    # The axial semi-axis is a lateral length scaled by `axial_ratio`, expressed
+    # back in slices via the anisotropy so that all outputs stay in image units.
+    rz_iso = r_eq_px * params.axial_ratio
+    rz_slices = rz_iso / acq.anisotropy
+
+    o = Organoid(
         oid=0,
-        x_um=det.cx * acq.px_um,
-        y_um=det.cy * acq.px_um,
-        z_um=z_focus * acq.z_um,
-        cx_px=det.cx,
-        cy_px=det.cy,
+        x_px=float(det.cx),
+        y_px=float(det.cy),
         z_slice=float(z_focus),
-        radius_um=r_eq_um,
-        diameter_um=2.0 * r_eq_um,
-        radius_z_um=rz_um,
-        volume_um3=(4.0 / 3.0) * np.pi * r_eq_um * r_eq_um * rz_um,
-        area_um2=det.area_px * acq.px_um ** 2,
-        circularity=det.circularity,
-        focus_sharpness=float(prominence),
-        n_slices=n_slices,
-        z_extent_slices=tuple(z_extent),
-        radial_profile_um=list(r_prof_px * acq.px_um),
         best_slice=int(round(z_focus)),
+        radius_px=r_eq_px,
+        diameter_px=2.0 * r_eq_px,
+        radius_z_slices=float(rz_slices),
+        area_px2=float(det.area_px),
+        volume_voxels=float((4.0 / 3.0) * np.pi * r_eq_px * r_eq_px * rz_slices),
+        circularity=float(det.circularity),
+        focus_sharpness=float(prominence),
+        n_slices=int(n_slices),
+        z_extent_slices=tuple(z_extent),
         source=source,
+        radial_profile_px=[float(v) for v in r_prof_px],
     )
+    add_calibrated(o, acq)
+    return o
+
+
+def add_calibrated(o: Organoid, acq: Acquisition) -> None:
+    """Fill the micrometre fields -- only if the stack actually has a scale."""
+    if not acq.calibrated:
+        return
+    p, zu = acq.px_um, acq.z_um
+    o.x_um = o.x_px * p
+    o.y_um = o.y_px * p
+    o.z_um = o.z_slice * zu
+    o.radius_um = o.radius_px * p
+    o.diameter_um = o.diameter_px * p
+    o.radius_z_um = o.radius_z_slices * zu
+    o.area_um2 = o.area_px2 * p * p
+    o.volume_um3 = (4.0 / 3.0) * np.pi * o.radius_um ** 2 * o.radius_z_um
+    o.radial_profile_um = [r * p for r in o.radial_profile_px]
+    if o.dome_distance_px is not None:
+        o.dome_distance_um = o.dome_distance_px * p
+
+
+def attach_dome(organoids: list[Organoid], dome, acq: Acquisition) -> None:
+    """Record each organoid's clearance to the gel/medium interface.
+
+    Measured from the organoid's *surface*, not its centre, so a value of zero
+    means the organoid is touching the outside of the droplet. Positive is
+    inside the gel.
+    """
+    if dome is None:
+        return
+    for o in organoids:
+        centre_gap = float(dome.distance_px(o.x_px, o.y_px, o.z_slice))
+        o.dome_distance_px = centre_gap - o.radius_px
+        o.dome_surface_slice = float(dome.surface_z_slice(
+            np.array([o.x_px]), np.array([o.y_px]))[0])
+        if acq.calibrated:
+            o.dome_distance_um = o.dome_distance_px * acq.px_um
 
 
 def merge_sources(*groups: list[Organoid], acq: Acquisition) -> list[Organoid]:
@@ -235,6 +297,21 @@ def merge_sources(*groups: list[Organoid], acq: Acquisition) -> list[Organoid]:
     for g in groups:
         allo.extend(g)
     return _drop_duplicates(allo, acq)
+
+
+def _band_from_contour(det, shape, half_width: int):
+    """Rasterise a detection's outline and return its boundary band.
+
+    The band, not the disc: in brightfield the contrast lives on the rim, and a
+    cystic organoid's interior is featureless.
+    """
+    import cv2
+
+    mask = np.zeros(shape, dtype=np.uint8)
+    cv2.fillPoly(mask, [det.contour.astype(np.int32)], 1)
+    if mask.sum() == 0:
+        return None
+    return contour_band(mask, half_width)
 
 
 def _nearest_det(t: Track, z: int, z_limit: int):
@@ -248,34 +325,28 @@ def _drop_duplicates(organoids: list[Organoid], acq: Acquisition) -> list[Organo
     Peak splitting is deliberately generous; this is the counterweight. Two
     entries at nearly the same (x, y, z) with similar radii are one organoid
     whose focus curve happened to be double-humped -- keep the sharper one.
+
+    Distances are compared in isotropic pixel units so the axial and lateral
+    tolerances mean the same thing.
     """
+    aniso = acq.anisotropy
+    dof_iso = acq.depth_of_field_slices * aniso
     kept: list[Organoid] = []
     for o in sorted(organoids, key=lambda x: -x.focus_sharpness):
         dup = False
         for k in kept:
-            lateral = np.hypot(o.x_um - k.x_um, o.y_um - k.y_um)
-            axial = abs(o.z_um - k.z_um)
-            ref = max(o.radius_um, k.radius_um)
-            if lateral < 0.5 * ref and axial < max(acq.depth_of_field_um, 0.6 * ref):
+            lateral = float(np.hypot(o.x_px - k.x_px, o.y_px - k.y_px))
+            axial = abs(o.z_slice - k.z_slice) * aniso
+            ref = max(o.radius_px, k.radius_px)
+            if lateral < 0.5 * ref and axial < max(dof_iso, 0.6 * ref):
                 dup = True
                 break
         if not dup:
             kept.append(o)
-    kept.sort(key=lambda x: (x.z_um, x.x_um))
+    kept.sort(key=lambda x: (x.z_slice, x.x_px))
     for i, o in enumerate(kept, start=1):
         o.oid = i
     return kept
-
-
-def _band_from_contour(det, shape, half_width: int):
-    """Rasterise a detection's outline and return its boundary band."""
-    import cv2
-
-    mask = np.zeros(shape, dtype=np.uint8)
-    cv2.fillPoly(mask, [det.contour.astype(np.int32)], 1)
-    if mask.sum() == 0:
-        return None
-    return contour_band(mask, half_width)
 
 
 def filter_organoids(organoids: list[Organoid], min_sharpness: float = 0.25
@@ -294,23 +365,27 @@ def filter_organoids(organoids: list[Organoid], min_sharpness: float = 0.25
 # Meshing
 # --------------------------------------------------------------------------- #
 
-def spheroid_mesh(o: Organoid, n_phi: int) -> tuple[np.ndarray, np.ndarray]:
-    """Vertices/faces (in um) of one organoid.
+def spheroid_mesh(o: Organoid, n_phi: int, anisotropy: float
+                  ) -> tuple[np.ndarray, np.ndarray]:
+    """Vertices/faces of one organoid, in isotropic pixel units.
 
     The equatorial ring is the measured outline r(theta); it is scaled by
-    sin(phi) going towards the poles and the poles sit at +/- radius_z.
+    sin(phi) towards the poles, with the poles at +/- the axial semi-axis.
+    Working in isotropic pixels keeps the mesh correct whether or not the stack
+    has a micrometre calibration.
     """
-    r_theta = np.asarray(o.radial_profile_um, dtype=np.float64)
+    r_theta = np.asarray(o.radial_profile_px, dtype=np.float64)
     n_theta = r_theta.size
     theta = np.linspace(0, 2 * np.pi, n_theta, endpoint=False)
     phi = np.linspace(0, np.pi, n_phi)
 
     sin_p = np.sin(phi)[:, None]
     cos_p = np.cos(phi)[:, None]
+    rz_iso = o.radius_z_slices * anisotropy
 
-    x = o.x_um + r_theta[None, :] * sin_p * np.cos(theta)[None, :]
-    y = o.y_um + r_theta[None, :] * sin_p * np.sin(theta)[None, :]
-    z = o.z_um + o.radius_z_um * cos_p * np.ones((1, n_theta))
+    x = o.x_px + r_theta[None, :] * sin_p * np.cos(theta)[None, :]
+    y = o.y_px + r_theta[None, :] * sin_p * np.sin(theta)[None, :]
+    z = o.z_slice * anisotropy + rz_iso * cos_p * np.ones((1, n_theta))
 
     verts = np.stack([x.ravel(), y.ravel(), z.ravel()], axis=1)
 
@@ -327,8 +402,13 @@ def spheroid_mesh(o: Organoid, n_phi: int) -> tuple[np.ndarray, np.ndarray]:
     return verts, np.asarray(faces, dtype=np.int64)
 
 
-def export_mesh(organoids: list[Organoid], params: Params, path: str) -> str:
-    """Write every organoid into one coloured PLY, in micrometres."""
+def export_mesh(organoids: list[Organoid], params: Params, path: str,
+                acq: Acquisition) -> tuple[str, str]:
+    """Write every organoid into one colour-coded PLY.
+
+    Returns (path, unit). The mesh is in micrometres when the stack is
+    calibrated and in isotropic pixels otherwise -- never in a made-up scale.
+    """
     import trimesh
     from matplotlib import colormaps
 
@@ -336,17 +416,20 @@ def export_mesh(organoids: list[Organoid], params: Params, path: str) -> str:
     if not organoids:
         raise ValueError("no organoids to export")
 
-    zs = np.array([o.z_um for o in organoids])
+    scale = acq.px_um if acq.calibrated else 1.0
+    unit = "um" if acq.calibrated else "isotropic_px"
+
+    zs = np.array([o.z_slice for o in organoids])
     lo, hi = float(zs.min()), float(zs.max())
     span = max(hi - lo, 1e-6)
 
     all_v, all_f, all_c = [], [], []
     offset = 0
     for o in organoids:
-        v, f = spheroid_mesh(o, params.n_phi)
-        rgba = cmap((o.z_um - lo) / span)
+        v, f = spheroid_mesh(o, params.n_phi, acq.anisotropy)
+        rgba = cmap((o.z_slice - lo) / span)
         colour = (np.array(rgba[:3]) * 255).astype(np.uint8)
-        all_v.append(v)
+        all_v.append(v * scale)
         all_f.append(f + offset)
         all_c.append(np.tile(colour, (v.shape[0], 1)))
         offset += v.shape[0]
@@ -358,4 +441,4 @@ def export_mesh(organoids: list[Organoid], params: Params, path: str) -> str:
         process=False,
     )
     mesh.export(path)
-    return path
+    return path, unit

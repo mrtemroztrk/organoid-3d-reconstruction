@@ -42,7 +42,8 @@ def read_group_metadata(stack_folder: str | Path, image_width: int = 960) -> tup
 
     gci = _find_gci(folder)
     if gci is None:
-        info["warning"] = "no .gci found - using default 4x geometry"
+        info["warning"] = ("no .gci found - stack is uncalibrated, results will "
+                           "be reported in pixels and slices")
         return acq, info
     info["source"] = str(gci)
 
@@ -60,7 +61,9 @@ def read_group_metadata(stack_folder: str | Path, image_width: int = 960) -> tup
     pitch = _xml_value(stack_xml, "Pitch")
     total = _xml_value(stack_xml, "TotalNumber")
     if pitch is not None:
+        # Keyence stores the stack pitch as an integer in units of 0.1 um.
         acq.z_um = int(pitch) / 10.0
+        acq.z_um_source = "keyence-stack-pitch"
         info["stack_pitch_raw"] = int(pitch)
     if total is not None:
         info["stack_total"] = int(total)
@@ -75,9 +78,15 @@ def read_group_metadata(stack_folder: str | Path, image_width: int = 960) -> tup
         mag = int(mag_raw) // 100
         info["magnification"] = mag
         if mag in _PX_UM_960:
-            # Calibration table is for a 960 px wide frame; rescale if the
-            # saved image was cropped or binned differently.
+            # The .gci records the objective but not the pixel size, so this
+            # comes from Keyence's documented BZ-X field of view for that
+            # objective. It is a lookup, not a measurement -- hence the explicit
+            # source tag on the result.
             acq.px_um = _PX_UM_960[mag] * (960.0 / image_width)
+            acq.px_um_source = "keyence-lens-table"
+        else:
+            info["warning"] = (f"objective {mag}x not in the calibration table; "
+                               f"lateral scale unknown")
 
     # NA is stored as a raw IEEE-754 bit pattern in an Int64 field, so it is not
     # worth decoding; infer it from the objective name instead.

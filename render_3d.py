@@ -70,6 +70,66 @@ def _box_actor(dims, colour=(0.22, 0.28, 0.42)) -> vtk.vtkActor:
     return actor
 
 
+def _dome_actor(dome: dict, dims, scale: float) -> list:
+    """Translucent shell for the fitted Matrigel droplet.
+
+    Clipped to the imaged field: the droplet is normally wider than the frame,
+    and drawing the parts the microscope never saw would imply measurements
+    that do not exist.
+    """
+    if not dome:
+        return []
+    aniso = dome["anisotropy"]
+    n_u, n_v = 120, 60
+    max_theta = np.arccos(np.clip(
+        ((dome["cz_slice"] - dome["substrate_slice"]) * aniso) / dome["radius_px"],
+        -1.0, 1.0))
+    th = np.linspace(0, max_theta, n_v)[:, None]
+    ph = np.linspace(0, 2 * np.pi, n_u, endpoint=False)[None, :]
+    x = dome["cx_px"] + dome["radius_px"] * np.sin(th) * np.cos(ph)
+    y = dome["cy_px"] + dome["radius_px"] * np.sin(th) * np.sin(ph)
+    z = (dome["cz_slice"] - dome["radius_px"] * np.cos(th) / aniso) * aniso
+    z = np.broadcast_to(z, x.shape)
+
+    verts = np.stack([x.ravel(), y.ravel(), z.ravel()], 1) * scale
+    w, h = dims[0], dims[1]
+    inside = ((verts[:, 0] >= -40 * scale) & (verts[:, 0] <= w + 40 * scale) &
+              (verts[:, 1] >= -40 * scale) & (verts[:, 1] <= h + 40 * scale))
+
+    faces = []
+    for i in range(n_v - 1):
+        for j in range(n_u):
+            j2 = (j + 1) % n_u
+            a, b = i * n_u + j, i * n_u + j2
+            c, d = (i + 1) * n_u + j, (i + 1) * n_u + j2
+            if inside[a] or inside[b] or inside[c] or inside[d]:
+                faces += [[a, c, d], [a, d, b]]
+    if not faces:
+        return []
+
+    pd = _polydata(verts, np.asarray(faces, dtype=np.int64))
+    normals = vtk.vtkPolyDataNormals()
+    normals.SetInputData(pd)
+    normals.SplittingOff()
+    normals.Update()
+
+    out = []
+    for opacity, wire in ((0.13, False), (0.09, True)):
+        m = vtk.vtkPolyDataMapper()
+        m.SetInputConnection(normals.GetOutputPort())
+        m.ScalarVisibilityOff()
+        a = vtk.vtkActor()
+        a.SetMapper(m)
+        pr = a.GetProperty()
+        pr.SetColor(0.50, 0.83, 1.0)
+        pr.SetOpacity(opacity)
+        if wire:
+            pr.SetRepresentationToWireframe()
+            pr.LightingOff()
+        out.append(a)
+    return out
+
+
 def _substrate_actor(dims, z_um: float, filled: bool = True) -> list:
     """Plane marking the glass surface (fill optional, outline always)."""
     x, y, _ = dims
@@ -155,7 +215,8 @@ def _caption(text: str, w: int, h: int) -> vtk.vtkTextActor:
 def render_view(ply: Path, dims, substrate_um: float, caption: str,
                 azimuth: float, elevation: float, size=(1100, 850),
                 zoom: float = 1.0, parallel: bool = False,
-                filled_substrate: bool = True) -> np.ndarray:
+                filled_substrate: bool = True, dome: dict | None = None,
+                scale: float = 1.0) -> np.ndarray:
     ren = vtk.vtkRenderer()
     ren.SetBackground(0.031, 0.043, 0.070)
     ren.SetBackground2(0.075, 0.098, 0.145)
@@ -164,6 +225,8 @@ def render_view(ply: Path, dims, substrate_um: float, caption: str,
     ren.AddActor(_mesh_actor(ply))
     ren.AddActor(_box_actor(dims))
     for a in _substrate_actor(dims, substrate_um, filled=filled_substrate):
+        ren.AddActor(a)
+    for a in _dome_actor(dome, dims, scale):
         ren.AddActor(a)
     for a in _scale_bar(dims):
         ren.AddActor(a)
@@ -222,7 +285,8 @@ def _polydata(verts: np.ndarray, faces: np.ndarray) -> vtk.vtkPolyData:
     return pd
 
 
-def render_closeups(organoids: list[dict], params, n: int = 4,
+def render_closeups(organoids: list[dict], params, anisotropy: float,
+                    scale: float, unit: str, n: int = 4,
                     size=(560, 560)) -> np.ndarray:
     """Render the few largest organoids one by one, close up.
 
@@ -234,17 +298,17 @@ def render_closeups(organoids: list[dict], params, n: int = 4,
     from jx3d.reconstruct import Organoid, spheroid_mesh
 
     cmap = colormaps.get_cmap("turbo")
-    zs = [o["z_um"] for o in organoids]
+    zs = [o["z_slice"] for o in organoids]
     lo, hi = min(zs), max(zs)
     span = max(hi - lo, 1e-6)
 
-    picked = sorted(organoids, key=lambda o: -o["diameter_um"])[:n]
+    picked = sorted(organoids, key=lambda o: -o["diameter_px"])[:n]
     tiles = []
     for o in picked:
         org = Organoid(**{k: v for k, v in o.items()
                           if k in Organoid.__dataclass_fields__})
-        verts, faces = spheroid_mesh(org, params["n_phi"])
-        verts = verts - verts.mean(axis=0)
+        verts, faces = spheroid_mesh(org, params["n_phi"], anisotropy)
+        verts = (verts - verts.mean(axis=0)) * scale
 
         mapper = vtk.vtkPolyDataMapper()
         normals = vtk.vtkPolyDataNormals()
@@ -256,7 +320,7 @@ def render_closeups(organoids: list[dict], params, n: int = 4,
         actor = vtk.vtkActor()
         actor.SetMapper(mapper)
         p = actor.GetProperty()
-        p.SetColor(*cmap((org.z_um - lo) / span)[:3])
+        p.SetColor(*cmap((org.z_slice - lo) / span)[:3])
         p.SetInterpolationToPhong()
         p.SetSpecular(0.45)
         p.SetSpecularPower(35)
@@ -269,9 +333,11 @@ def render_closeups(organoids: list[dict], params, n: int = 4,
         ren.AddActor(actor)
 
         cap = vtk.vtkTextActor()
-        cap.SetInput(f"#{org.oid}   {org.diameter_um:.0f} um\n"
-                     f"depth {org.z_um:.0f} um  ·  Z{org.best_slice + 1}\n"
-                     f"circularity {org.circularity:.2f}")
+        gap = ("" if org.dome_distance_px is None
+               else f"\ngap to dome {org.dome_distance_px:.0f} px")
+        cap.SetInput(f"#{org.oid}   {org.diameter_px:.0f} px\n"
+                     f"Z{org.best_slice + 1}  ·  circularity {org.circularity:.2f}"
+                     + gap)
         cap.SetDisplayPosition(14, size[1] - 66)
         cap.GetTextProperty().SetFontSize(18)
         cap.GetTextProperty().SetColor(0.88, 0.92, 1.0)
@@ -313,7 +379,8 @@ def render_closeups(organoids: list[dict], params, n: int = 4,
     return row
 
 
-def _colorbar(width: int, lo_um: float, hi_um: float, height: int = 54) -> np.ndarray:
+def _colorbar(width: int, lo_um: float, hi_um: float, height: int = 54,
+              unit: str = "um") -> np.ndarray:
     """Depth colour scale (turbo), labelled in µm."""
     import cv2
     from matplotlib import colormaps
@@ -329,8 +396,8 @@ def _colorbar(width: int, lo_um: float, hi_um: float, height: int = 54) -> np.nd
 
     f, s, c = cv2.FONT_HERSHEY_SIMPLEX, 0.48, (215, 225, 240)
     cv2.putText(bar, "depth", (18, y1), f, s, c, 1, cv2.LINE_AA)
-    cv2.putText(bar, f"{lo_um:.0f} um (dome top)", (x0, y1 + 18), f, 0.42, c, 1, cv2.LINE_AA)
-    txt = f"{hi_um:.0f} um (near glass)"
+    cv2.putText(bar, f"{lo_um:.0f} {unit} (dome top)", (x0, y1 + 18), f, 0.42, c, 1, cv2.LINE_AA)
+    txt = f"{hi_um:.0f} {unit} (near glass)"
     (tw, _), _ = cv2.getTextSize(txt, f, 0.42, 1)
     cv2.putText(bar, txt, (x1 - tw, y1 + 18), f, 0.42, c, 1, cv2.LINE_AA)
     return bar
@@ -345,12 +412,17 @@ def main(argv=None) -> int:
     outdir = Path(a.outdir)
     ply = outdir / "organoids.ply"
     meta = json.loads((outdir / "organoids.json").read_text())
-    acq = meta["acquisition"]
+    units = meta["units"]
+    aniso = units["anisotropy"]
+    # The PLY is written in micrometres when the stack is calibrated and in
+    # isotropic pixels otherwise; the scene has to use the same frame.
+    scale = units["px_um"] if units["calibrated"] else 1.0
+    unit_label = "µm" if units["calibrated"] else "px"
 
-    # volume bounds, from the image dimensions
     prof = np.load(outdir / "focus_profile.npy")
-    dims = (960 * acq["px_um"], 720 * acq["px_um"], len(prof) * acq["z_um"])
-    substrate_um = meta["substrate_slice"] * acq["z_um"]
+    dims = (960 * scale, 720 * scale, len(prof) * aniso * scale)
+    substrate_um = meta["substrate_slice"] * aniso * scale
+    dome = meta.get("dome")
     n = meta["n_organoids"]
 
     views = [
@@ -364,14 +436,15 @@ def main(argv=None) -> int:
     for name, az, el, zoom, par, fill in views:
         img = render_view(ply, dims, substrate_um, name, az, el,
                           size=tuple(a.size), zoom=zoom, parallel=par,
-                          filled_substrate=fill)
+                          filled_substrate=fill, dome=dome, scale=scale)
         bgr = cv2.cvtColor(img[:, :, :3].astype(np.uint8), cv2.COLOR_RGB2BGR)
         slug = name.split()[0].lower().replace("/", "-")
         cv2.imwrite(str(outdir / f"render_{slug}.png"), bgr)
         tiles.append(bgr)
         print(f"  {name}")
 
-    close = render_closeups(meta["organoids"], meta["params"], n=4,
+    close = render_closeups(meta["organoids"], meta["params"], aniso, scale,
+                            unit_label, n=4,
                             size=(a.size[0] // 2, a.size[1] // 2))
     close = cv2.cvtColor(close, cv2.COLOR_RGB2BGR)
     close = cv2.resize(close, tuple(a.size), interpolation=cv2.INTER_AREA)
@@ -384,8 +457,8 @@ def main(argv=None) -> int:
     print("  Close-ups (4 largest organoids)")
 
     h, w = tiles[0].shape[:2]
-    zs = [o["z_um"] for o in meta["organoids"]]
-    bar = _colorbar(w * 2 + 6, min(zs), max(zs))
+    zs = [o["z_slice"] * aniso * scale for o in meta["organoids"]]
+    bar = _colorbar(w * 2 + 6, min(zs), max(zs), unit=unit_label)
     grid = np.zeros((h * 2 + 6 + bar.shape[0], w * 2 + 6, 3), dtype=np.uint8)
     grid[:] = (18, 12, 8)
     for i, t in enumerate(tiles):

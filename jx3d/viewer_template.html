@@ -163,6 +163,7 @@ footer .zlab b{color:var(--accent);font-size:14px}
     <div class="tools">
       <button id="tg-photo" class="on" title="Show the raw slice as a textured plane inside the 3D scene (P)">Photo plane</button>
       <button id="tg-clip" title="Slicer: clip everything above the plane so organoid cross-sections sit on the photo (S)">Slice mode</button>
+      <button id="tg-dome" class="on" title="Fitted Matrigel dome surface (D)">Dome</button>
       <button id="tg-box" class="on" title="Volume bounds">Box</button>
       <button id="btn-reset3d" title="Reset camera">⟲</button>
       <button id="btn-top" title="Top view — same angle as the microscope (T)">Top</button>
@@ -263,7 +264,7 @@ const state = {
   selected: null,
   hover: null,
   showFocus: true, showCross: true, showId: false, rawOnly: false,
-  showPhoto: true, showBox: true, clip: false,
+  showPhoto: true, showBox: true, showDome: true, clip: false,
   minDiam: 0, minFocus: 0.25,
   colorMode: "depth",
   playing: false,
@@ -282,15 +283,22 @@ function ramp(t){
 function rampCss(t){ const c = ramp(t).map(v=>Math.round(v)); return `rgb(${c[0]},${c[1]},${c[2]})`; }
 
 const RANGE = {
-  depth: [Math.min(...ORG.map(o=>o.z_um)), Math.max(...ORG.map(o=>o.z_um))],
-  size:  [Math.min(...ORG.map(o=>o.diameter_um)), Math.max(...ORG.map(o=>o.diameter_um))],
+  depth: [Math.min(...ORG.map(o=>o.z_slice)), Math.max(...ORG.map(o=>o.z_slice))],
+  size:  [Math.min(...ORG.map(o=>o.diameter_px)), Math.max(...ORG.map(o=>o.diameter_px))],
   focus: [0, 1],
 };
+// Pixels are the measurement; µm are shown alongside only when the stack is
+// calibrated, and never synthesised from a guessed scale.
+const CAL = M.calibrated;
+const fmtLen = (px, dp = 1) => px.toFixed(dp) + " px" +
+      (CAL ? ` (${(px * M.px_um).toFixed(0)} µm)` : "");
+const fmtDepth = (sl, dp = 1) => "Z" + (sl + 1).toFixed(dp) +
+      (CAL ? ` (${(sl * M.z_um).toFixed(0)} µm)` : "");
 function colorValue(o){
   if (state.colorMode === "id") return ((o.oid * 0.381966) % 1);
   const r = RANGE[state.colorMode] || RANGE.depth;
-  const v = state.colorMode === "depth" ? o.z_um
-          : state.colorMode === "size"  ? o.diameter_um
+  const v = state.colorMode === "depth" ? o.z_slice
+          : state.colorMode === "size"  ? o.diameter_px
           : o.focus_sharpness;
   return (v - r[0]) / Math.max(1e-6, r[1] - r[0]);
 }
@@ -298,15 +306,15 @@ function orgColor(o){ return rampCss(colorValue(o)); }
 
 /* ===================== filtering ===================== */
 function visible(o){
-  return o.diameter_um >= state.minDiam && o.focus_sharpness >= state.minFocus;
+  return o.diameter_px >= state.minDiam && o.focus_sharpness >= state.minFocus;
 }
 function visibleList(){ return ORG.filter(visible); }
 
 /* ===================== geometry helpers ===================== */
 // Radius scale of the model's cross-section at depth `zUm` (null if it does not reach)
-function crossScale(o, zUm){
-  const dz = zUm - o.z_um;
-  const rz = o.radius_z_um;
+function crossScale(o, zSlice){
+  const dz = zSlice - o.z_slice;
+  const rz = o.radius_z_slices;
   if (rz <= 0 || Math.abs(dz) >= rz) return null;
   return Math.sqrt(1 - (dz / rz) * (dz / rz));
 }
@@ -314,8 +322,8 @@ function crossScale(o, zUm){
 function crossPolygonPx(o, scale){
   const pts = new Array(NTHETA);
   for (let i = 0; i < NTHETA; i++){
-    const r = o.radial_profile_um[i] * scale / M.px_um;
-    pts[i] = [o.cx_px + r * COS[i], o.cy_px + r * SIN[i]];
+    const r = o.radial_profile_px[i] * scale;
+    pts[i] = [o.x_px + r * COS[i], o.y_px + r * SIN[i]];
   }
   return pts;
 }
@@ -369,12 +377,12 @@ function draw2d(){
   }
   if (state.rawOnly) return;
 
-  const zUm = state.z * M.z_um;
+  const zSlice = state.z;
   g2d.lineJoin = "round";
 
   for (const o of visibleList()){
     const inFocus = Math.abs(o.best_slice - state.z) <= 1;
-    const s = crossScale(o, zUm);
+    const s = crossScale(o, zSlice);
     if (s === null) continue;
     if (inFocus && !state.showFocus) continue;
     if (!inFocus && !state.showCross) continue;
@@ -407,7 +415,7 @@ function draw2d(){
     g2d.globalAlpha = 1; g2d.setLineDash([]);
 
     if (state.showId && (inFocus || sel)){
-      const p = toScreen(o.cx_px, o.cy_px);
+      const p = toScreen(o.x_px, o.y_px);
       g2d.font = "600 11px ui-sans-serif,system-ui";
       g2d.textAlign = "center"; g2d.textBaseline = "middle";
       g2d.lineWidth = 3; g2d.strokeStyle = "rgba(0,0,0,.75)";
@@ -418,14 +426,14 @@ function draw2d(){
 }
 
 function organoidAt(ix, iy){
-  const zUm = state.z * M.z_um;
+  const zSlice = state.z;
   let best = null, bestArea = Infinity;
   for (const o of visibleList()){
-    const s = crossScale(o, zUm);
+    const s = crossScale(o, zSlice);
     if (s === null) continue;
     const poly = crossPolygonPx(o, s);
     if (pointInPoly(ix, iy, poly)){
-      const a = o.area_um2 * s * s;
+      const a = o.area_px2 * s * s;
       if (a < bestArea){ bestArea = a; best = o; }   // prefer the smallest, for nested outlines
     }
   }
@@ -477,9 +485,10 @@ function showTooltip(e, o){
   tip.style.display = "block";
   tip.style.left = (e.clientX + 14) + "px";
   tip.style.top  = (e.clientY + 14) + "px";
-  tip.innerHTML = `<b>#${o.oid}</b> · ${o.diameter_um.toFixed(0)} µm diameter<br>
-    <span style="color:var(--muted)">focal slice</span> ${o.best_slice + 1}
-    <span style="color:var(--muted)">· depth</span> ${o.z_um.toFixed(0)} µm`;
+  tip.innerHTML = `<b>#${o.oid}</b> · ${fmtLen(o.diameter_px, 0)} across<br>
+    <span style="color:var(--muted)">focal slice</span> ${o.best_slice + 1}` +
+    (o.dome_distance_px !== null && o.dome_distance_px !== undefined
+      ? `<br><span style="color:var(--muted)">to dome surface</span> ${fmtLen(o.dome_distance_px, 0)}` : "");
 }
 function hideTooltip(){ tip.style.display = "none"; }
 
@@ -491,7 +500,10 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070c);
 const camera = new THREE.PerspectiveCamera(42, 1, 1, 40000);
 
-const VOL = { x: M.width * M.px_um, y: M.height * M.px_um, z: M.depth * M.z_um };
+// The 3D scene works in isotropic pixel units: lateral distances are pixels,
+// and slice indices are multiplied by the anisotropy so a sphere is a sphere.
+const ANISO = M.anisotropy;
+const VOL = { x: M.width, y: M.height, z: M.depth * ANISO };
 const CENTER = new THREE.Vector3(VOL.x / 2, VOL.y / 2, VOL.z / 2);
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.62));
@@ -519,11 +531,12 @@ function buildSpheroid(o, nPhi){
     const phi = Math.PI * i / (nPhi - 1);
     const sp = Math.sin(phi), cp = Math.cos(phi);
     for (let j = 0; j < nT; j++){
-      const r = o.radial_profile_um[j];
-      pos.push(r * sp * COS[j], r * sp * SIN[j], o.radius_z_um * cp);
+      const r = o.radial_profile_px[j];
+      const rz = o.radius_z_slices * ANISO;
+      pos.push(r * sp * COS[j], r * sp * SIN[j], rz * cp);
       const n = new THREE.Vector3(sp * COS[j] / Math.max(r, 1e-6),
                                   sp * SIN[j] / Math.max(r, 1e-6),
-                                  cp / Math.max(o.radius_z_um, 1e-6)).normalize();
+                                  cp / Math.max(rz, 1e-6)).normalize();
       nrm.push(n.x, n.y, n.z);
     }
   }
@@ -544,13 +557,67 @@ for (const o of ORG){
   const mat = new THREE.MeshPhongMaterial({ color: 0xffffff, shininess: 42, specular: 0x223344,
                                             transparent: true, opacity: 0.94 });
   const mesh = new THREE.Mesh(buildSpheroid(o, M.n_phi), mat);
-  mesh.position.set(o.x_um, o.y_um, o.z_um);
+  mesh.position.set(o.x_px, o.y_px, o.z_slice * ANISO);
   mesh.userData.oid = o.oid;
   scene.add(mesh);
   meshes.set(o.oid, mesh);
   pickables.push(mesh);
 }
 
+
+/* --- Matrigel dome surface: the droplet the organoids live in --------------
+   Fitted to the bright interface ridge that the curved gel/medium boundary
+   leaves on every slice, so this is measured geometry, not a decoration. The
+   cap is normally wider than the imaged field, so it is clipped to the frame
+   rather than drawn floating outside it. */
+let domeMesh = null;
+if (M.dome){
+  const D = M.dome;
+  const nU = 120, nV = 60;
+  const maxTheta = Math.acos(Math.max(-1, Math.min(1,
+      ((D.cz_slice - D.substrate_slice) * D.anisotropy) / D.radius_px)));
+  const pos = [], idx = [];
+  for (let i = 0; i < nV; i++){
+    const th = maxTheta * i / (nV - 1), st = Math.sin(th), ct = Math.cos(th);
+    for (let j = 0; j < nU; j++){
+      const ph = 2 * Math.PI * j / nU;
+      pos.push(D.cx_px + D.radius_px * st * Math.cos(ph),
+               D.cy_px + D.radius_px * st * Math.sin(ph),
+               (D.cz_slice - D.radius_px * ct / D.anisotropy) * ANISO);
+    }
+  }
+  const inField = k => {
+    const x = pos[k*3], y = pos[k*3+1];
+    return x >= -40 && x <= M.width + 40 && y >= -40 && y <= M.height + 40;
+  };
+  for (let i = 0; i < nV - 1; i++){
+    for (let j = 0; j < nU; j++){
+      const j2 = (j + 1) % nU;
+      const a = i*nU+j, b = i*nU+j2, c = (i+1)*nU+j, d = (i+1)*nU+j2;
+      if (inField(a) || inField(b) || inField(c) || inField(d)){
+        idx.push(a, c, d, a, d, b);
+      }
+    }
+  }
+  if (idx.length){
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx);
+    g.computeVertexNormals();
+    domeMesh = new THREE.Mesh(g, new THREE.MeshPhongMaterial({
+      color: 0x7fd4ff, transparent: true, opacity: 0.16, side: THREE.DoubleSide,
+      depthWrite: false, shininess: 60 }));
+    scene.add(domeMesh);
+
+    const wire = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+      color: 0x7fd4ff, wireframe: true, transparent: true, opacity: 0.10,
+      depthWrite: false }));
+    scene.add(wire);
+    domeMesh.userData.wire = wire;
+  }
+}
+
+/* --- current Z plane --- */
 /* --- slicer: the raw slice as a textured plane inside the 3D scene ---
    The photograph is placed at its own Z depth inside the volume, so the organoid
    models sit above and below the very image they were measured from. `flipY=false`
@@ -581,7 +648,7 @@ renderer.localClippingEnabled = true;
 const clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 
 function updatePlane(){
-  const z = state.z * M.z_um;
+  const z = state.z * ANISO;
   plane.position.z = z; planeEdge.position.z = z;
   planeGroup.visible = state.showPhoto;
 
@@ -687,6 +754,12 @@ function updateMeshes(){
   boxGroup.visible = state.showBox;
 }
 
+function updateDome(){
+  if (!domeMesh) return;
+  domeMesh.visible = state.showDome;
+  domeMesh.userData.wire.visible = state.showDome;
+}
+
 function render3d(){ renderer.render(scene, camera); }
 
 /* ===================== selection ===================== */
@@ -695,7 +768,7 @@ function select(oid, from3d){
   const o = ORG.find(x => x.oid === state.selected);
   if (o){
     if (from3d) setZ(o.best_slice);
-    orbit.target.set(o.x_um, o.y_um, o.z_um);
+    orbit.target.set(o.x_px, o.y_px, o.z_slice * ANISO);
     applyCamera();
   }
   renderDetail(o);
@@ -708,16 +781,23 @@ function renderDetail(o){
   if (!o){ box.style.display = "none"; return; }
   box.style.display = "block";
   const rows = [
-    ["Diameter", o.diameter_um.toFixed(1) + " µm"],
-    ["Equatorial area", o.area_um2.toFixed(0) + " µm²"],
-    ["Volume", (o.volume_um3 / 1e6).toFixed(3) + " nl"],
-    ["Depth (Z)", o.z_um.toFixed(1) + " µm"],
+    ["Diameter", fmtLen(o.diameter_px)],
+    ["Equatorial area", o.area_px2.toFixed(0) + " px²" +
+        (CAL ? ` (${o.area_um2.toFixed(0)} µm²)` : "")],
+    ["Volume", o.volume_voxels.toFixed(0) + " voxels" +
+        (CAL ? ` (${(o.volume_um3 / 1e6).toFixed(3)} nl)` : "")],
+    ["Depth", fmtDepth(o.z_slice)],
     ["Focal slice", (o.best_slice + 1) + " / " + M.depth],
+    ["Axial semi-axis", o.radius_z_slices.toFixed(2) + " slices"],
     ["Focus sharpness", o.focus_sharpness.toFixed(2)],
     ["Circularity", o.circularity.toFixed(2)],
     ["Slices in focus", o.n_slices],
-    ["XY position", `${o.x_um.toFixed(0)}, ${o.y_um.toFixed(0)} µm`],
+    ["Detected by", o.source],
+    ["XY position", `${o.x_px.toFixed(0)}, ${o.y_px.toFixed(0)} px`],
   ];
+  if (o.dome_distance_px !== null && o.dome_distance_px !== undefined){
+    rows.push(["Gap to dome surface", fmtLen(o.dome_distance_px)]);
+  }
   document.getElementById("detail-body").innerHTML =
     `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
        <span class="dot" style="background:${orgColor(o)};width:12px;height:12px"></span>
@@ -731,15 +811,15 @@ function renderDetail(o){
 function renderList(){
   const mode = document.getElementById("sortmode").value;
   const arr = visibleList().slice();
-  arr.sort(mode === "size"  ? (a,b) => b.diameter_um - a.diameter_um
+  arr.sort(mode === "size"  ? (a,b) => b.diameter_px - a.diameter_px
         :  mode === "focus" ? (a,b) => b.focus_sharpness - a.focus_sharpness
-        :                     (a,b) => a.z_um - b.z_um);
+        :                     (a,b) => a.z_slice - b.z_slice);
   document.getElementById("listcount").textContent = `(${arr.length})`;
   document.getElementById("list").innerHTML = arr.map(o => `
     <div class="item ${state.selected === o.oid ? "sel" : ""}" data-oid="${o.oid}">
       <span class="dot" style="background:${orgColor(o)}"></span>
       <span class="n">#${o.oid}</span>
-      <span class="d">${o.diameter_um.toFixed(0)} µm · Z${o.best_slice + 1}</span>
+      <span class="d">${o.diameter_px.toFixed(0)} px · Z${o.best_slice + 1}</span>
     </div>`).join("");
   for (const el of document.querySelectorAll(".item")){
     el.onclick = () => { const id = +el.dataset.oid; state.selected = null; select(id, true); };
@@ -775,9 +855,9 @@ function drawSizeChart(){
   g.clearRect(0, 0, W, H);
   const arr = visibleList();
   if (!arr.length) return;
-  const mxd = Math.max(...arr.map(o => o.diameter_um));
+  const mxd = Math.max(...arr.map(o => o.diameter_px));
   const nb = 24, bins = new Array(nb).fill(0);
-  for (const o of arr) bins[Math.min(nb - 1, Math.floor(o.diameter_um / mxd * nb))]++;
+  for (const o of arr) bins[Math.min(nb - 1, Math.floor(o.diameter_px / mxd * nb))]++;
   const mx = Math.max(1, ...bins), bw = (W - 2 * pad) / nb;
   for (let i = 0; i < nb; i++){
     const h = (bins[i] / mx) * (H - 16);
@@ -786,7 +866,7 @@ function drawSizeChart(){
   }
   g.globalAlpha = 1; g.fillStyle = "#8b9bb8"; g.font = "9px ui-sans-serif";
   g.fillText("0", 4, H - 2);
-  g.textAlign = "right"; g.fillText(mxd.toFixed(0) + " µm", W - 4, H - 2); g.textAlign = "left";
+  g.textAlign = "right"; g.fillText(mxd.toFixed(0) + " px", W - 4, H - 2); g.textAlign = "left";
 }
 
 function drawFocusStrip(){
@@ -824,17 +904,17 @@ function drawFocusStrip(){
 function updateKpis(){
   const arr = visibleList();
   document.getElementById("k-count").textContent = arr.length;
-  const dm = arr.map(o => o.diameter_um).sort((a,b) => a - b);
+  const dm = arr.map(o => o.diameter_px).sort((a,b) => a - b);
   document.getElementById("k-diam").innerHTML =
-    (dm.length ? dm[Math.floor(dm.length/2)].toFixed(0) : "0") + '<span class="u"> µm</span>';
-  const vol = arr.reduce((s,o) => s + o.volume_um3, 0) / 1e6;
-  document.getElementById("k-vol").innerHTML = vol.toFixed(1) + '<span class="u"> nl</span>';
-  const zs = arr.map(o => o.z_um);
+    (dm.length ? dm[Math.floor(dm.length/2)].toFixed(0) : "0") + '<span class="u"> px</span>';
+  const vol = arr.reduce((s,o) => s + o.volume_voxels, 0) / 1e6;
+  document.getElementById("k-vol").innerHTML = vol.toFixed(2) + '<span class="u"> Mvox</span>';
+  const zs = arr.map(o => o.z_slice);
   document.getElementById("k-depth").innerHTML =
-    (zs.length ? (Math.max(...zs) - Math.min(...zs)).toFixed(0) : "0") + '<span class="u"> µm</span>';
+    (zs.length ? (Math.max(...zs) - Math.min(...zs)).toFixed(0) : "0") + '<span class="u"> slices</span>';
 
   const r = RANGE[state.colorMode];
-  const unit = state.colorMode === "depth" ? " µm" : state.colorMode === "size" ? " µm" : "";
+  const unit = state.colorMode === "depth" ? "" : state.colorMode === "size" ? " px" : "";
   document.getElementById("lg-lo").textContent = state.colorMode === "id" ? "" : r[0].toFixed(0) + unit;
   document.getElementById("lg-hi").textContent = state.colorMode === "id" ? "" : r[1].toFixed(0) + unit;
   document.getElementById("lg-bar").style.background =
@@ -854,7 +934,8 @@ function setZ(z){
   state.z = Math.max(0, Math.min(M.depth - 1, Math.round(z)));
   zslider.value = state.z;
   document.getElementById("z-num").textContent = state.z + 1;
-  document.getElementById("z-um").textContent = (state.z * M.z_um).toFixed(0) + " µm deep";
+  document.getElementById("z-um").textContent =
+    CAL ? (state.z * M.z_um).toFixed(0) + " µm deep" : "slice index";
   updatePlane(); updateKpis(); drawDepthChart(); drawFocusStrip();
   draw2d(); render3d();
 }
@@ -885,6 +966,7 @@ window.addEventListener("keydown", e => {
   if (e.key === "s" || e.key === "S") document.getElementById("tg-clip").click();
   if (e.key === "p" || e.key === "P") document.getElementById("tg-photo").click();
   if (e.key === "t" || e.key === "T") document.getElementById("btn-top").click();
+  if (e.key === "d" || e.key === "D") document.getElementById("tg-dome").click();
   if (e.key === "1") setLayout("lay-split");
   if (e.key === "2") setLayout("lay-3d");
   if (e.key === "3") setLayout("lay-2d");
@@ -907,6 +989,7 @@ toggle("tg-id", "showId");
 toggle("tg-raw", "rawOnly");
 toggle("tg-photo", "showPhoto", updatePlane);
 toggle("tg-clip", "clip", applyClipping);
+toggle("tg-dome", "showDome", updateDome);
 toggle("tg-box", "showBox", updateMeshes);
 document.getElementById("btn-fit").onclick = () => { fit2d(); draw2d(); };
 document.getElementById("btn-reset3d").onclick = () => { resetCamera(); render3d(); };
@@ -975,14 +1058,16 @@ document.getElementById("meta").innerHTML = [
   `<span><b>${M.dataset}</b></span>`,
   `<span>${M.objective}</span>`,
   `<span>${M.width}×${M.height}×${M.depth}</span>`,
-  `<span><b>${M.px_um.toFixed(2)}</b> µm/px · <b>${M.z_um.toFixed(1)}</b> µm/slice</span>`,
-  `<span>field <b>${(M.width * M.px_um / 1000).toFixed(2)}×${(M.height * M.px_um / 1000).toFixed(2)}</b> mm</span>`,
-  `<span>depth <b>${(M.depth * M.z_um / 1000).toFixed(2)}</b> mm</span>`,
+  CAL ? `<span><b>${M.px_um.toFixed(2)}</b> µm/px · <b>${M.z_um.toFixed(1)}</b> µm/slice`
+      + ` <span style="opacity:.6">(${M.px_um_source})</span></span>`
+      : `<span style="color:var(--accent2)"><b>uncalibrated</b> — values in px / slices</span>`,
+  `<span>anisotropy <b>${ANISO.toFixed(2)}</b> slice/px</span>`,
 ].join("");
 
 resetCamera();
 resize();
 applyClipping();
+updateDome();
 applyFilters();
 setZ(state.z);
 </script>
