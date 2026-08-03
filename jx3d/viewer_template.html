@@ -28,7 +28,7 @@ header h1 span{color:var(--accent)}
 .meta b{color:var(--fg);font-weight:600}
 .spacer{flex:1}
 /* ---------- main ---------- */
-main{display:grid;min-height:0;transition:grid-template-columns .18s ease}
+main{display:grid;min-height:0}
 main.split{grid-template-columns:1fr 1fr 300px}
 main.only3d{grid-template-columns:0 1fr 300px}
 main.only2d{grid-template-columns:1fr 0 300px}
@@ -225,6 +225,10 @@ body.present #present-hud{display:block}
 
     <div class="card">
       <h2>Colour by</h2>
+      <select id="colormap" style="margin-bottom:6px">
+        <option value="viridis">Viridis (perceptually uniform)</option>
+        <option value="turbo">Turbo (higher contrast, not uniform)</option>
+      </select>
       <select id="colormode">
         <option value="depth">Depth (Z)</option>
         <option value="size">Diameter</option>
@@ -232,6 +236,7 @@ body.present #present-hud{display:block}
         <option value="id">Organoid ID</option>
       </select>
       <div class="legend"><span id="lg-lo">—</span><div class="bar" id="lg-bar"></div><span id="lg-hi">—</span></div>
+      <div class="note" id="lg-note"></div>
     </div>
 
     <div class="card">
@@ -300,9 +305,23 @@ const state = {
 };
 
 /* ===================== colour ===================== */
-// short, readable turbo-like ramp
-const RAMP = [[48,18,59],[70,107,227],[35,187,213],[103,234,124],
-              [224,224,49],[251,144,44],[221,53,15],[122,4,3]];
+/* Colour always encodes a measured quantity, never decoration -- which value
+   is shown is the "Colour by" selector, and the legend under it carries the
+   numeric range. The one exception is 'Organoid ID', where colour is a
+   deliberately arbitrary label used to tell neighbours apart.
+
+   Viridis is the default because it is perceptually uniform: equal steps in
+   colour are equal steps in the underlying number, and it survives greyscale
+   printing and the common forms of colour blindness. Turbo is offered because
+   it resolves fine detail better, but it is not uniform -- readers see false
+   boundaries at its yellow and cyan bands. */
+const RAMPS = {
+  viridis: [[68,1,84],[72,40,120],[62,74,137],[49,104,142],[38,130,142],
+            [31,158,137],[53,183,121],[109,205,89],[180,222,44],[253,231,37]],
+  turbo:   [[48,18,59],[70,107,227],[35,187,213],[103,234,124],
+            [224,224,49],[251,144,44],[221,53,15],[122,4,3]],
+};
+let RAMP = RAMPS.viridis;
 function ramp(t){
   t = Math.max(0, Math.min(1, t));
   const x = t * (RAMP.length - 1), i = Math.min(RAMP.length - 2, Math.floor(x)), f = x - i;
@@ -728,6 +747,7 @@ function applyCamera(){
     orbit.target.z + orbit.radius * ct);
   camera.up.set(0, 0, -1);            // Z points down, matching depth in the stack
   camera.lookAt(orbit.target);
+  render3d();   // a camera move is a repaint; without this, dragging does nothing
 }
 function resetCamera(){
   orbit.target.copy(CENTER);
@@ -784,7 +804,19 @@ c3d.addEventListener("click", e => {
   select(hits.length ? hits[0].object.userData.oid : null, true);
 });
 
+/* A single reusable shell drawn just behind the selected organoid: rendering
+   its back faces slightly enlarged draws a bright rim around the silhouette,
+   which reads at any distance and does not depend on the object's own colour.
+   Tinting alone was not enough to find one object among a hundred. */
+const selOutline = new THREE.Mesh(
+  new THREE.SphereGeometry(1, 8, 6),
+  new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.BackSide,
+                                transparent: true, opacity: 0.9, depthWrite: false }));
+selOutline.visible = false;
+scene.add(selOutline);
+
 function updateMeshes(){
+  const anySel = state.selected !== null;
   for (const o of ORG){
     const m = meshes.get(o.oid);
     const vis = visible(o);
@@ -793,10 +825,22 @@ function updateMeshes(){
     const sel = state.selected === o.oid;
     const c = ramp(colorValue(o));
     m.material.color.setRGB(c[0]/255, c[1]/255, c[2]/255);
-    m.material.emissive.setHex(sel ? 0x335566 : 0x000000);
-    m.material.opacity = state.selected === null ? 0.94 : (sel ? 1.0 : 0.28);
+    m.material.emissive.setHex(sel ? 0x6688aa : 0x000000);
+    m.material.opacity = !anySel ? 0.94 : (sel ? 1.0 : 0.12);
   }
   boxGroup.visible = state.showBox;
+
+  const so = anySel ? ORG.find(o => o.oid === state.selected) : null;
+  if (so && visible(so)){
+    const src = meshes.get(so.oid);
+    selOutline.geometry.dispose();
+    selOutline.geometry = src.geometry.clone();
+    selOutline.position.copy(src.position);
+    selOutline.scale.setScalar(1.14);
+    selOutline.visible = true;
+  } else {
+    selOutline.visible = false;
+  }
 }
 
 function updateDome(){
@@ -963,7 +1007,13 @@ function updateKpis(){
   document.getElementById("lg-lo").textContent = state.colorMode === "id" ? "" : r[0].toFixed(0) + unit;
   document.getElementById("lg-hi").textContent = state.colorMode === "id" ? "" : r[1].toFixed(0) + unit;
   document.getElementById("lg-bar").style.background =
-    "linear-gradient(to right," + [0,.2,.4,.6,.8,1].map(t => rampCss(t)).join(",") + ")";
+    "linear-gradient(to right," + [0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1].map(t => rampCss(t)).join(",") + ")";
+  document.getElementById("lg-note").textContent = {
+    depth: "Focal-plane depth: where in the dome the organoid sits.",
+    size:  "Equivalent-circle diameter of the measured equatorial outline.",
+    focus: "Prominence of the focus peak — a quality score, not a size.",
+    id:    "Arbitrary label, only to tell neighbouring organoids apart.",
+  }[state.colorMode] || "";
 
   const nf = arr.filter(o => Math.abs(o.best_slice - state.z) <= 1).length;
   document.getElementById("focuscount").innerHTML =
@@ -1072,7 +1122,7 @@ for (const id of Object.keys(LAYOUTS)){
 function setLayout(id){
   document.querySelector("main").className = LAYOUTS[id];
   for (const k of Object.keys(LAYOUTS)) document.getElementById(k).classList.toggle("on", k === id);
-  requestAnimationFrame(resize);
+  // the ResizeObserver picks the new geometry up once it has settled
 }
 
 const fmind = document.getElementById("f-mind"), fminf = document.getElementById("f-minf");
@@ -1096,6 +1146,11 @@ document.getElementById("colormode").onchange = e => {
   recolour();
   updateMeshes(); updateKpis(); renderList(); drawDepthChart(); draw2d(); render3d();
 };
+document.getElementById("colormap").onchange = e => {
+  RAMP = RAMPS[e.target.value] || RAMPS.viridis;
+  recolour(); updateMeshes(); updateKpis(); renderList();
+  drawDepthChart(); draw2d(); render3d();
+};
 document.getElementById("sortmode").onchange = renderList;
 
 /* ===================== presentation mode ===================== */
@@ -1111,7 +1166,6 @@ function setPresent(on){
     document.exitFullscreen?.().catch(() => {});
   }
   updateHud();
-  requestAnimationFrame(resize);
 }
 function updateHud(){
   if (!state.present) return;
@@ -1160,6 +1214,15 @@ function resize(){
   applyCamera(); draw2d(); render3d();
 }
 window.addEventListener("resize", resize);
+
+/* A layout switch changes the panes' boxes, and reading their size in the same
+   frame gives whatever the browser has computed so far -- which is how the
+   canvases ended up with an aspect ratio that did not match their element and
+   drew everything stretched. Observing the boxes instead means the canvas is
+   resized once the layout has actually settled, whatever caused the change. */
+const ro = new ResizeObserver(() => resize());
+ro.observe(document.getElementById("pane2d"));
+ro.observe(document.getElementById("pane3d"));
 
 /* ===================== init ===================== */
 document.getElementById("meta").innerHTML = [
