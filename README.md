@@ -268,8 +268,16 @@ want to run a new dataset in front of an audience rather than from a terminal.
 ### Command line
 
 ```bash
-./.venv/bin/python run.py path/to/4x_00009 --open
+./.venv/bin/python run.py                 # nearest 4x_00009, or the first stack found
+./.venv/bin/python run.py --menu          # list what is here and pick one
+./.venv/bin/python run.py path/to/stack   # a specific folder
 ```
+
+With no folder argument it looks for a Z-stack below the current directory,
+preferring one named `4x_00009` — the position in the reference dataset whose
+organoids span the full depth of the dome — and otherwise taking the first one
+it finds, so it still does something sensible on data it has never seen.
+`--list` prints the candidates without running anything.
 
 ```bash
 # fastest: one segmentation pass on the projection (~30 s)

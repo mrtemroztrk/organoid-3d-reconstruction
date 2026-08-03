@@ -221,18 +221,32 @@ def _label(img: np.ndarray, text: str, sub: str = "") -> np.ndarray:
 
 
 
-def _save_gif(path: Path, frames, duration: float, palettesize: int = 64) -> None:
-    """Write a GIF, quantised hard.
+def _save_gif(path: Path, frames, delay_ms: int, palettesize: int = 64) -> None:
+    """Write a GIF, quantised hard, with a frame delay that actually sticks.
+
+    `duration` here is in **milliseconds**. Passing seconds silently rounds the
+    delay to zero, the file ends up with no timing at all, and every browser
+    falls back to its own minimum -- which is why several earlier attempts to
+    slow these animations down changed nothing. The written delay is read back
+    and asserted for exactly that reason.
 
     These are mostly greyscale micrographs, so a 64-colour palette is visually
     indistinguishable from 256 and roughly halves the file. Four full-size GIFs
     in one README is a slow page otherwise.
     """
     import imageio.v2 as imageio
+    from PIL import Image
 
-    imageio.mimsave(path, frames, format="GIF", duration=duration, loop=0,
+    imageio.mimsave(path, frames, format="GIF", duration=int(delay_ms), loop=0,
                     palettesize=palettesize)
-    print(f"  {path}  ({path.stat().st_size / 1e6:.1f} MB)")
+
+    with Image.open(path) as im:
+        im.seek(min(1, im.n_frames - 1))
+        written = im.info.get("duration", 0)
+    if not written:
+        raise RuntimeError(f"{path}: frame delay was not stored (got {written!r})")
+    print(f"  {path}  ({path.stat().st_size / 1e6:.1f} MB, "
+          f"{written} ms/frame, {im.n_frames * written / 1000:.1f} s loop)")
 
 
 def _focus_gif(stack, organoids, params, docs, imageio, n_frames,
@@ -282,7 +296,7 @@ def _focus_gif(stack, organoids, params, docs, imageio, n_frames,
                              panel_w - panel_w // 2, panel_w // 2)
         frames.append(cv2.cvtColor(np.hstack([img, panel]), cv2.COLOR_BGR2RGB))
 
-    _save_gif(docs / "focus.gif", frames, 0.12, palettesize=64)
+    _save_gif(docs / "focus.gif", frames, 150, palettesize=64)
 
 
 def _edf_gif(stack, params, docs, imageio, prof, meta,
@@ -324,7 +338,7 @@ def _edf_gif(stack, params, docs, imageio, prof, meta,
 
     for _ in range(6):                      # hold on the finished projection
         frames.append(frames[-1])
-    _save_gif(docs / "edf.gif", frames, 0.12, palettesize=64)
+    _save_gif(docs / "edf.gif", frames, 150, palettesize=64)
 
 
 def main(argv=None) -> int:
@@ -392,7 +406,7 @@ def main(argv=None) -> int:
         print(f"\r  frame {i + 1}/{len(zs)}", end="", flush=True)
     print()
 
-    _save_gif(docs / "slicer.gif", frames, 0.14, palettesize=64)
+    _save_gif(docs / "slicer.gif", frames, 160, palettesize=64)
 
     # single representative still, for the top of the README
     mid = frames[len(frames) // 2]
@@ -403,11 +417,11 @@ def main(argv=None) -> int:
     orbit = OrbitScene(outdir / "organoids.ply", dims, substrate_um,
                        dome=dome, scale=scale)
     frames = []
-    n_orb = 56
+    n_orb = 72
     for i in range(n_orb):
         az = 360.0 * i / n_orb
         f = orbit.frame(az, 22.0)
-        ow = 760
+        ow = 680
         f = cv2.resize(f, (ow, int(f.shape[0] * ow / f.shape[1])),
                        interpolation=cv2.INTER_AREA)
         cal_txt = (f"{units['px_um']:.2f} µm/px · {units['z_um']:.0f} µm/slice"
@@ -417,9 +431,9 @@ def main(argv=None) -> int:
         frames.append(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
         print(f"\r  orbit {i + 1}/{n_orb}", end="", flush=True)
     print()
-    # 56 frames over a full turn at 0.26 s each: ~15 s per revolution, and
-    # 6.4 deg per step so it still reads as motion rather than stepping.
-    _save_gif(docs / "orbit.gif", frames, 0.26, palettesize=112)
+    # 72 frames over a full turn at 300 ms each: 21.6 s per revolution, 5 deg
+    # per step. Slow enough to follow an individual organoid all the way round.
+    _save_gif(docs / "orbit.gif", frames, 300, palettesize=96)
 
     # ------------------------------------------------------------- focus.gif
     # The core idea, on one organoid: its rim is crisp only near its own

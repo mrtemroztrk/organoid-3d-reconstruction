@@ -14,6 +14,7 @@ from pathlib import Path
 
 from jx3d.config import Params
 from jx3d.pipeline import run
+from jx3d.stack import DEFAULT_HINT, default_stack, discover_stacks
 
 
 def main(argv=None) -> int:
@@ -22,7 +23,13 @@ def main(argv=None) -> int:
                     "(shape-from-focus + per-slice segmentation)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("folder", help="Z-stack folder containing *_Z###_*.tif")
+    p.add_argument("folder", nargs="?", default=None,
+                   help=f"Z-stack folder containing *_Z###_*.tif. Omit it and the "
+                        f"nearest {DEFAULT_HINT} is used, or the first stack found.")
+    p.add_argument("--menu", action="store_true",
+                   help="list the stacks found here and pick one interactively")
+    p.add_argument("--list", action="store_true",
+                   help="list the stacks found here and exit")
     p.add_argument("-o", "--out", default=None,
                    help="output folder (default: output/<folder name>)")
 
@@ -74,7 +81,40 @@ def main(argv=None) -> int:
 
     a = p.parse_args(argv)
 
-    folder = Path(a.folder)
+    if a.list or a.menu:
+        stacks = discover_stacks(".")
+        if not stacks:
+            print("No Z-stacks found below the current folder.", file=sys.stderr)
+            return 1
+        for i, st in enumerate(stacks, 1):
+            n = len([q for q in st.glob("*.tif")])
+            mark = "  <- default" if DEFAULT_HINT in st.name else ""
+            print(f"  {i:2d}  {st}  ({n} slices){mark}")
+        if a.list:
+            return 0
+        try:
+            choice = input(f"\nstack [1-{len(stacks)}, Enter = default]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 1
+        if not choice:
+            folder = default_stack(".") or stacks[0]
+        elif choice.isdigit() and 1 <= int(choice) <= len(stacks):
+            folder = stacks[int(choice) - 1]
+        else:
+            print(f"Not a valid choice: {choice}", file=sys.stderr)
+            return 1
+    elif a.folder:
+        folder = Path(a.folder)
+    else:
+        found = default_stack(".")
+        if found is None:
+            print("No Z-stack found below the current folder. Pass one "
+                  "explicitly, or run serve.py to browse for it.", file=sys.stderr)
+            return 1
+        folder = found
+        print(f"No folder given; using {folder}")
+
     if not folder.is_dir():
         print(f"No such folder: {folder}", file=sys.stderr)
         return 1

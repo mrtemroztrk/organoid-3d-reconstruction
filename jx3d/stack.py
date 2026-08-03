@@ -57,6 +57,70 @@ class ZStack:
         return "\n".join(lines)
 
 
+SKIP_DIRS = {".git", ".venv", "venv", "output", "docs", "__pycache__",
+             "node_modules", "site-packages"}
+
+DEFAULT_HINT = "4x_00009"
+"""Which stack `run.py` reaches for when no folder is given.
+
+The dataset this package was developed against has fifteen positions in one
+folder; 4x_00009 is the one with organoids spread through the full depth of the
+dome, so it is the useful default to open. Any other folder can be passed
+explicitly, or picked from the control panel.
+"""
+
+
+def is_stack_dir(d: Path) -> bool:
+    """Does this folder hold a Z-stack? (at least a few *_Z###_*.tif files)"""
+    if not d.is_dir():
+        return False
+    n = 0
+    for p in d.glob("*.tif"):
+        if _Z_RE.search(p.name):
+            n += 1
+            if n >= 3:
+                return True
+    return False
+
+
+def discover_stacks(root: str | Path = ".", max_depth: int = 3) -> list[Path]:
+    """Every Z-stack folder at or below `root`, breadth-first, sorted by name."""
+    root = Path(root)
+    found: list[Path] = []
+    frontier = [(root, 0)]
+    while frontier:
+        d, depth = frontier.pop(0)
+        if is_stack_dir(d):
+            found.append(d)
+            continue                     # a stack has no stacks inside it
+        if depth >= max_depth:
+            continue
+        try:
+            kids = sorted(p for p in d.iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for k in kids:
+            if k.name.startswith(".") or k.name in SKIP_DIRS:
+                continue
+            frontier.append((k, depth + 1))
+    return sorted(found, key=lambda p: p.name)
+
+
+def default_stack(root: str | Path = ".", hint: str = DEFAULT_HINT) -> Path | None:
+    """The stack to open when the user did not name one.
+
+    Prefers a folder matching `hint`; otherwise the first one found, so the
+    package still does something sensible on a dataset it has never seen.
+    """
+    stacks = discover_stacks(root)
+    if not stacks:
+        return None
+    for p in stacks:
+        if hint in p.name:
+            return p
+    return stacks[0]
+
+
 def load_stack(folder: str | Path, channel: str | None = None) -> ZStack:
     """Read every *.tif in `folder`, ordered by the _Z### token in the name."""
     folder = Path(folder)
