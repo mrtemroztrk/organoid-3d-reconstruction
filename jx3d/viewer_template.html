@@ -112,10 +112,16 @@ footer{
   background:var(--panel);border-top:1px solid var(--line);
   padding:8px 16px;display:flex;align-items:center;gap:14px;
 }
-footer .zlab{font-size:12px;font-variant-numeric:tabular-nums;min-width:190px}
+footer .zlab{font-size:12px;font-variant-numeric:tabular-nums;min-width:210px}
 footer .zlab b{color:var(--accent);font-size:14px}
-#zslider{flex:1;accent-color:var(--accent)}
-#focusstrip{width:230px;height:34px;display:block;border-radius:4px;background:rgba(0,0,0,.3)}
+/* The slider and the focus profile share one column so the strip reads as the
+   slider's axis: the glass plane and every organoid's focal slice line up with
+   the position of the handle. Previously it was a 230 px thumbnail wedged into
+   the corner, too small to read anything from. */
+.zwrap{flex:1;display:flex;flex-direction:column;gap:2px;min-width:0}
+#zslider{width:100%;accent-color:var(--accent);margin:0}
+#focusstrip{width:100%;height:38px;display:block;border-radius:4px;background:rgba(0,0,0,.32)}
+body.present #focusstrip{height:52px}
 .btn{
   background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:5px;
   padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit;
@@ -131,7 +137,6 @@ body.present footer{padding:14px 26px;gap:20px}
 body.present footer .zlab{font-size:17px;min-width:290px}
 body.present footer .zlab b{font-size:23px}
 body.present #zslider{height:26px}
-body.present #focusstrip{width:320px;height:44px}
 body.present .btn{font-size:16px;padding:9px 16px}
 #present-hud{
   position:absolute;top:18px;left:22px;z-index:8;display:none;pointer-events:none;
@@ -269,9 +274,11 @@ body.present #present-hud{display:block}
 
 <footer>
   <button class="btn" id="btn-play" title="Space">▶</button>
-  <div class="zlab">Slice <b id="z-num">1</b> / <span id="z-max">1</span> &nbsp;·&nbsp; <span id="z-um">0 µm</span></div>
-  <input type="range" id="zslider" min="0" max="1" value="0">
-  <canvas id="focusstrip" width="460" height="68"></canvas>
+  <div class="zlab">Slice <b id="z-num">1</b> / <span id="z-max">1</span><span id="z-um"></span></div>
+  <div class="zwrap">
+    <input type="range" id="zslider" min="0" max="1" value="0">
+    <canvas id="focusstrip" width="1400" height="72"></canvas>
+  </div>
 </footer>
 
 <div id="tooltip"></div>
@@ -740,6 +747,12 @@ const orbit = {
   theta: -Math.PI / 2.6, phi: 1.15,
 };
 function applyCamera(){
+  // Track the clipping planes to the orbit distance. Leaving near at 1 with far
+  // at 40000 spends almost the whole depth buffer on empty space, and touching
+  // surfaces then z-fight.
+  camera.near = Math.max(0.1, orbit.radius / 200);
+  camera.far = orbit.radius * 20;
+  camera.updateProjectionMatrix();
   const st = Math.sin(orbit.phi), ct = Math.cos(orbit.phi);
   camera.position.set(
     orbit.target.x + orbit.radius * st * Math.cos(orbit.theta),
@@ -960,6 +973,10 @@ function drawSizeChart(){
 
 function drawFocusStrip(){
   const cv = document.getElementById("focusstrip"), g = cv.getContext("2d");
+  // match the backing store to the element so the strip lines up with the
+  // slider above it instead of being stretched from a fixed 1400 px canvas
+  const want = Math.max(200, Math.round(cv.clientWidth));
+  if (cv.width !== want) cv.width = want;
   const W = cv.width, H = cv.height;
   g.clearRect(0, 0, W, H);
   const p = M.focus_profile;
@@ -985,8 +1002,13 @@ function drawFocusStrip(){
   const x = (state.z / (p.length - 1)) * W;
   g.strokeStyle = "#ef5350"; g.lineWidth = 1.5;
   g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
-  g.fillStyle = "#8b9bb8"; g.font = "9px ui-sans-serif";
-  g.fillText("focus profile", 4, 10);
+  g.fillStyle = "#93a4c0"; g.font = "10px ui-sans-serif";
+  g.fillText("sharpness across the stack", 5, 11);
+  g.textAlign = "right";
+  g.fillText("slice " + (state.z + 1) + " / " + M.depth, W - 5, 11);
+  g.textAlign = "left";
+  g.fillStyle = "#4dd0e1";
+  g.fillText("| organoid focal planes", 5, H - 4);
   g.fillStyle = "#ffb74d"; g.fillText("glass", Math.min(W - 30, xs + 3), H - 6);
 }
 
@@ -1045,7 +1067,7 @@ function setZ(z){
   zslider.value = state.z;
   document.getElementById("z-num").textContent = state.z + 1;
   document.getElementById("z-um").textContent =
-    CAL ? (state.z * M.z_um).toFixed(0) + " µm deep" : "slice index";
+    CAL ? "  ·  " + (state.z * M.z_um).toFixed(0) + " µm deep" : "";
   updatePlane(); updateKpis(); drawDepthChart(); drawFocusStrip(); updateHud();
   draw2d(); render3d();
 }
@@ -1130,7 +1152,7 @@ fmind.max = Math.ceil(RANGE.size[1]);
 function applyFilters(){
   state.minDiam = +fmind.value; state.minFocus = +fminf.value;
   invalidateVisible();
-  document.getElementById("o-mind").textContent = state.minDiam + " µm";
+  document.getElementById("o-mind").textContent = state.minDiam + " px";
   document.getElementById("o-minf").textContent = state.minFocus.toFixed(2);
   if (state.selected !== null){
     const o = ORG.find(x => x.oid === state.selected);

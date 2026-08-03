@@ -139,8 +139,18 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
                 _log("  droplet is wider than the field of view - the surface is "
                      "clipped to the imaged region")
             if stack.acq.calibrated:
-                _log(f"  = {dome.contact_radius_px * stack.acq.px_um * 2 / 1000:.2f} mm "
-                     f"across, {dome.height_slices * stack.acq.z_um:.0f} µm tall")
+                a = dome.contact_radius_px * stack.acq.px_um
+                h = dome.height_slices * stack.acq.z_um
+                # Spherical-cap volume. Printed every run as a standing check on
+                # the axial scale: the Z pitch is stored as a bare integer with
+                # no unit, and only the right reading of it yields a droplet
+                # that could have been pipetted into a well.
+                vol_ul = np.pi * h / 6.0 * (3.0 * a * a + h * h) / 1e9
+                _log(f"  = {2 * a / 1000:.2f} mm across, {h / 1000:.2f} mm tall")
+                _log(f"  droplet volume {vol_ul:.1f} µl"
+                     + ("  (consistent with a pipetted Matrigel dome)"
+                        if 5 <= vol_ul <= 120 else
+                        "  <- OUTSIDE the usual 20-50 µl; check the Z scale"))
 
     edf_orgs: list[Organoid] = []
     slice_orgs: list[Organoid] = []

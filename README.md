@@ -29,17 +29,16 @@ Colour is depth in the dome; the orange outline is the glass surface.*
 ## Units
 
 Every measurement is primarily in **pixels** (lateral) and **slice indices**
-(axial), because that is what the image files actually contain. Micrometres are
-emitted only when a scale was genuinely recovered — from the Keyence `.gci`, or
-from `--px-size` / `--z-step-um` — and each one records its provenance:
+(axial), because that is what the image files contain. Micrometres are emitted
+only when a scale was genuinely recovered, and each one records its provenance:
 
 ```json
 "units": {
   "primary": "pixels (lateral) and slice indices (axial)",
   "calibrated": true,
-  "px_um": 3.7736,  "px_um_source": "keyence-lens-table",
+  "px_um": 3.7744,  "px_um_source": "keyence-calibration",
   "z_um": 10.0,     "z_um_source": "keyence-stack-pitch",
-  "anisotropy": 2.6499, "anisotropy_source": "calibration"
+  "anisotropy": 2.6506, "anisotropy_source": "calibration"
 }
 ```
 
@@ -50,11 +49,65 @@ nothing downstream can tell the difference.
 
 Volumes are given as `volume_voxels`, where one voxel is `1 px × 1 px × 1 slice`.
 
-Note what the calibration sources mean here: the `.gci` records the *objective*,
-not the pixel size, so `keyence-lens-table` is a lookup against Keyence's
-documented BZ-X field of view — traceable, but not a measurement of this
-particular instrument. Override it with `--px-size` if you have a stage
-micrometer calibration.
+### Where the scale actually comes from
+
+Both numbers are worth justifying, because everything in micrometres depends on
+them.
+
+**Lateral scale — read from the instrument.** The `.gci` group file carries an
+`Image/Calibration` field, stored the way Keyence stores every `System.Double`:
+as the raw IEEE-754 bit pattern of the double, written out as a signed 64-bit
+integer.
+
+```python
+>>> import struct
+>>> struct.unpack("<d", struct.pack("<q", 4660518447848644499))[0]
+3774.4179166666668          # nanometres per pixel -> 3.7744 µm/px
+```
+
+That decoding is not a guess. Two other fields in the same file are encoded the
+same way *and* are also written in plain text in the objective's name,
+`"PlanApo 4x 0.20/20.00mm"`:
+
+| field | stored Int64 | decodes to | plain text in the lens name |
+|---|---|---|---|
+| `NumericalAperture` | 4596373779694328218 | **0.2** | `0.20` |
+| `WorkingDistance` | 4626322717216342016 | **20.0** | `20.00mm` |
+| `Calibration` | 4660518447848644499 | **3774.418** | — |
+
+Two independent fields decode to exactly the values printed on the lens, so the
+method is verified before it is applied to the one value that is not written
+anywhere else.
+
+As a further check, Keyence's documented field of view for a 4x objective on a
+960 px wide frame gives 3.7736 µm/px — **0.02% from the instrument's own
+figure**. The lookup table is kept only as a fallback for files with no
+`Calibration` field, and when both are present the pipeline records the
+disagreement in `organoids.json` (`calibration_vs_table_pct`).
+
+**Axial scale — inferred, then cross-checked.** The Z pitch is stored as the
+plain integer `<Stack><Pitch>100</Pitch>`, with no unit. Keyence's UI sets the
+pitch in micrometres to one decimal place, so the natural reading is units of
+0.1 µm, giving 10.0 µm per slice. That is an inference, so it is checked against
+something physical: the fitted Matrigel droplet.
+
+The dome fit gives a contact radius of 923 px and a height of 171 slices. Turn
+that into a spherical-cap volume under each candidate unit:
+
+| assumed pitch | droplet height | droplet volume |
+|---|---|---|
+| 1 µm/slice | 0.17 mm | 3.3 µL |
+| **10 µm/slice** | **1.71 mm** | **35.2 µL** |
+| 100 µm/slice | 17.1 mm | 2939 µL |
+
+Matrigel domes are pipetted at roughly 20–50 µL. Only one of the three readings
+produces a droplet that could exist in a well, and it is the one the encoding
+already suggested. The pipeline prints this volume on every run precisely so the
+axial scale keeps being challenged rather than assumed.
+
+Note what is *not* a calibration: the TIFF `XResolution`/`YResolution` tags read
+96 DPI, which is a screen-display placeholder written by the export, not a
+spatial scale. They are ignored.
 
 ---
 
@@ -440,6 +493,26 @@ measurement proportionally wrong.
 
 ---
 
+## Checking the viewer
+
+```bash
+./.venv/bin/python tests/check_viewer.py output/4x_00009/viewer.html
+```
+
+Loads the generated page in headless Firefox, synthesises the interactions and
+asserts on the result. It exists because the viewer's worst faults were
+invisible to every other kind of check: the 3D view moved the camera but never
+requested a repaint, and switching layouts left each canvas' backing store out
+of step with its element. Both versions parsed cleanly and passed a syntax and
+reference check; neither fault could be seen without running the page.
+
+One thing to know if you extend it: headless Firefox screenshots do not capture
+a WebGL canvas — it comes out black even while the scene renders correctly — so
+the harness reads the framebuffer back with `gl.readPixels` rather than trusting
+the picture.
+
+---
+
 ## Layout
 
 ```
@@ -456,8 +529,10 @@ jx3d/
   viewer.py       self-contained HTML viewer
   viewer_template.html
 run.py             CLI
+serve.py           browser control panel
 render_3d.py       offline renders
 make_docs_media.py figures for this README
+tests/check_viewer.py  browser-driven check of the generated viewer
 ```
 
 ## License
