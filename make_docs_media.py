@@ -222,31 +222,46 @@ def _label(img: np.ndarray, text: str, sub: str = "") -> np.ndarray:
 
 
 def _save_gif(path: Path, frames, delay_ms: int, palettesize: int = 64) -> None:
-    """Write a GIF, quantised hard, with a frame delay that actually sticks.
+    """Write a GIF with one shared, undithered palette.
 
-    `duration` here is in **milliseconds**. Passing seconds silently rounds the
-    delay to zero, the file ends up with no timing at all, and every browser
-    falls back to its own minimum -- which is why several earlier attempts to
-    slow these animations down changed nothing. The written delay is read back
-    and asserted for exactly that reason.
+    Two details matter more than they look.
 
-    These are mostly greyscale micrographs, so a 64-colour palette is visually
-    indistinguishable from 256 and roughly halves the file. Four full-size GIFs
-    in one README is a slow page otherwise.
+    *Delay unit.* It is written in **milliseconds**. Passing seconds silently
+    rounds the delay to zero, the file ends up with no timing at all, and every
+    browser falls back to its own minimum -- which is why earlier attempts to
+    slow these animations down changed nothing. The value is read back from the
+    finished file and asserted.
+
+    *No dithering.* Floyd-Steinberg scatters per-frame noise across the smooth
+    background gradient of a 3D render. That noise is invisible at a glance but
+    it is different on every frame, so it defeats compression and roughly
+    doubles the file. Quantising every frame against one global palette with
+    dithering off is what makes a high frame-rate animation affordable, and a
+    high frame rate is the only way rotation looks smooth rather than stepped.
     """
-    import imageio.v2 as imageio
     from PIL import Image
 
-    imageio.mimsave(path, frames, format="GIF", duration=int(delay_ms), loop=0,
-                    palettesize=palettesize)
+    pil = [Image.fromarray(f) for f in frames]
+    # derive one palette from a spread of frames so colours never shift mid-loop
+    sample = pil[:: max(1, len(pil) // 12)] or pil[:1]
+    w, h = pil[0].size
+    strip = Image.new("RGB", (w, h * len(sample)))
+    for i, im in enumerate(sample):
+        strip.paste(im, (0, i * h))
+    pal = strip.quantize(colors=palettesize, method=Image.Quantize.MEDIANCUT)
+
+    quant = [im.quantize(palette=pal, dither=Image.Dither.NONE) for im in pil]
+    quant[0].save(path, save_all=True, append_images=quant[1:],
+                  duration=int(delay_ms), loop=0, disposal=1, optimize=True)
 
     with Image.open(path) as im:
         im.seek(min(1, im.n_frames - 1))
         written = im.info.get("duration", 0)
+        n = im.n_frames
     if not written:
         raise RuntimeError(f"{path}: frame delay was not stored (got {written!r})")
-    print(f"  {path}  ({path.stat().st_size / 1e6:.1f} MB, "
-          f"{written} ms/frame, {im.n_frames * written / 1000:.1f} s loop)")
+    print(f"  {path}  ({path.stat().st_size / 1e6:.1f} MB, {n} frames, "
+          f"{written} ms/frame, {n * written / 1000:.1f} s loop)")
 
 
 def _focus_gif(stack, organoids, params, docs, imageio, n_frames,
@@ -296,11 +311,11 @@ def _focus_gif(stack, organoids, params, docs, imageio, n_frames,
                              panel_w - panel_w // 2, panel_w // 2)
         frames.append(cv2.cvtColor(np.hstack([img, panel]), cv2.COLOR_BGR2RGB))
 
-    _save_gif(docs / "focus.gif", frames, 150, palettesize=64)
+    _save_gif(docs / "focus.gif", frames, 90, palettesize=128)
 
 
 def _edf_gif(stack, params, docs, imageio, prof, meta,
-             imageio_frames: int = 28, width: int = 840) -> None:
+             imageio_frames: int = 40, width: int = 840) -> None:
     """Left: slices sweeping. Right: the all-in-focus image building up."""
     from jx3d.focus import tenengrad
 
@@ -336,16 +351,16 @@ def _edf_gif(stack, params, docs, imageio, prof, meta,
         print(f"\r  edf {len(frames)}/{imageio_frames}", end="", flush=True)
     print()
 
-    for _ in range(6):                      # hold on the finished projection
+    for _ in range(10):                     # hold on the finished projection
         frames.append(frames[-1])
-    _save_gif(docs / "edf.gif", frames, 150, palettesize=64)
+    _save_gif(docs / "edf.gif", frames, 110, palettesize=128)
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Build README figures")
     ap.add_argument("outdir")
     ap.add_argument("--docs", default="docs")
-    ap.add_argument("--frames", type=int, default=26)
+    ap.add_argument("--frames", type=int, default=44)
     ap.add_argument("--width", type=int, default=900)
     a = ap.parse_args(argv)
 
@@ -406,7 +421,7 @@ def main(argv=None) -> int:
         print(f"\r  frame {i + 1}/{len(zs)}", end="", flush=True)
     print()
 
-    _save_gif(docs / "slicer.gif", frames, 160, palettesize=64)
+    _save_gif(docs / "slicer.gif", frames, 110, palettesize=144)
 
     # single representative still, for the top of the README
     mid = frames[len(frames) // 2]
@@ -417,11 +432,11 @@ def main(argv=None) -> int:
     orbit = OrbitScene(outdir / "organoids.ply", dims, substrate_um,
                        dome=dome, scale=scale)
     frames = []
-    n_orb = 72
+    n_orb = 240
     for i in range(n_orb):
         az = 360.0 * i / n_orb
         f = orbit.frame(az, 22.0)
-        ow = 680
+        ow = 520
         f = cv2.resize(f, (ow, int(f.shape[0] * ow / f.shape[1])),
                        interpolation=cv2.INTER_AREA)
         cal_txt = (f"{units['px_um']:.2f} µm/px · {units['z_um']:.0f} µm/slice"
@@ -431,9 +446,13 @@ def main(argv=None) -> int:
         frames.append(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
         print(f"\r  orbit {i + 1}/{n_orb}", end="", flush=True)
     print()
-    # 72 frames over a full turn at 300 ms each: 21.6 s per revolution, 5 deg
-    # per step. Slow enough to follow an individual organoid all the way round.
-    _save_gif(docs / "orbit.gif", frames, 300, palettesize=96)
+    # Smoothness is a frame-rate problem, not a delay problem: a slow rotation
+    # built from few frames just steps slowly. 240 frames at 20 fps gives 1.5
+    # deg per step over a 12 s revolution -- calm and continuous at once.
+    # 176 colours, not 80: undithered quantisation to a small palette
+    # posterises the smooth shading on the spheres and collapses the depth
+    # colour ramp, which is the one thing this figure is meant to show.
+    _save_gif(docs / "orbit.gif", frames, 50, palettesize=176)
 
     # ------------------------------------------------------------- focus.gif
     # The core idea, on one organoid: its rim is crisp only near its own
@@ -441,7 +460,7 @@ def main(argv=None) -> int:
     _focus_gif(stack, organoids, params, docs, imageio, a.frames)
 
     # --------------------------------------------------------------- edf.gif
-    _edf_gif(stack, params, docs, imageio, prof, meta, imageio_frames=28)
+    _edf_gif(stack, params, docs, imageio, prof, meta, imageio_frames=40)
 
     # copy the static figures the pipeline already produced
     for name, dest in [("qc_edf.png", "recall.png"),
