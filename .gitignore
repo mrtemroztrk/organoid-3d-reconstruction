@@ -17,7 +17,6 @@ BK52_WT_9805_B/
 *.ktf
 
 # editor / OS
-.claude/
 .vscode/
 .idea/
 .DS_Store

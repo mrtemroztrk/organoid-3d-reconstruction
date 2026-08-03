@@ -121,6 +121,31 @@ footer .zlab b{color:var(--accent);font-size:14px}
   padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit;
 }
 .btn:hover{border-color:var(--accent)}
+/* ---------- presentation mode ---------- */
+body.present header, body.present aside,
+body.present .tools, body.present .pane-hint,
+body.present .pane-label, body.present .pane-slider{display:none}
+body.present main{grid-template-columns:1fr 1fr}
+body.present.only3d main{grid-template-columns:0 1fr}
+body.present footer{padding:14px 26px;gap:20px}
+body.present footer .zlab{font-size:17px;min-width:290px}
+body.present footer .zlab b{font-size:23px}
+body.present #zslider{height:26px}
+body.present #focusstrip{width:320px;height:44px}
+body.present .btn{font-size:16px;padding:9px 16px}
+#present-hud{
+  position:absolute;top:18px;left:22px;z-index:8;display:none;pointer-events:none;
+  text-shadow:0 2px 10px #000;
+}
+body.present #present-hud{display:block}
+#present-hud .big{font-size:26px;font-weight:700;letter-spacing:-.02em}
+#present-hud .sub{font-size:14px;color:var(--muted);margin-top:2px}
+#preload{
+  position:absolute;bottom:12px;right:14px;z-index:8;
+  background:rgba(17,23,37,.92);border:1px solid var(--line);border-radius:7px;
+  padding:7px 12px;font-size:12px;color:var(--fg);cursor:pointer;font-family:inherit;
+}
+#preload:disabled{color:var(--muted);cursor:default}
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-thumb{background:#2a3550;border-radius:4px}
 ::-webkit-scrollbar-track{background:transparent}
@@ -145,6 +170,9 @@ footer .zlab b{color:var(--accent);font-size:14px}
   <section class="pane" id="pane2d">
     <canvas id="c2d"></canvas>
     <div class="pane-label">Raw microscope image</div>
+    <div id="present-hud"><div class="big" id="hud-title"></div>
+      <div class="sub" id="hud-sub"></div></div>
+    <button id="preload" title="Decode every slice up front so playback never stutters">Preload slices</button>
     <div class="pane-hint">Wheel: zoom · Drag: pan · Click: select organoid · ← → : slice</div>
     <div class="tools">
       <button id="tg-focus" class="on" title="Measured outline of organoids whose focal plane is this slice">In focus</button>
@@ -265,6 +293,7 @@ const state = {
   hover: null,
   showFocus: true, showCross: true, showId: false, rawOnly: false,
   showPhoto: true, showBox: true, showDome: true, clip: false,
+  present: false, playMs: 70,
   minDiam: 0, minFocus: 0.25,
   colorMode: "depth",
   playing: false,
@@ -302,13 +331,22 @@ function colorValue(o){
           : o.focus_sharpness;
   return (v - r[0]) / Math.max(1e-6, r[1] - r[0]);
 }
-function orgColor(o){ return rampCss(colorValue(o)); }
+function orgColor(o){ return o._css || rampCss(colorValue(o)); }
 
 /* ===================== filtering ===================== */
 function visible(o){
   return o.diameter_px >= state.minDiam && o.focus_sharpness >= state.minFocus;
 }
-function visibleList(){ return ORG.filter(visible); }
+let _visCache = null;
+function visibleList(){
+  if (_visCache === null) _visCache = ORG.filter(visible);
+  return _visCache;
+}
+function invalidateVisible(){ _visCache = null; }
+
+// Colour only changes when the mode changes, so resolve it once per object
+// instead of rebuilding an rgb() string for every organoid on every frame.
+function recolour(){ for (const o of ORG) o._css = rampCss(colorValue(o)); }
 
 /* ===================== geometry helpers ===================== */
 // Radius scale of the model's cross-section at depth `zUm` (null if it does not reach)
@@ -364,7 +402,14 @@ function fit2d(){
 function toScreen(x, y){ return [x * view2d.scale + view2d.tx, y * view2d.scale + view2d.ty]; }
 function toImage(sx, sy){ return [(sx - view2d.tx) / view2d.scale, (sy - view2d.ty) / view2d.scale]; }
 
-function draw2d(){
+/* Drawing is deferred to a single animation frame. Scrubbing the Z slider
+   fires input events far faster than the canvas can be redrawn, and doing the
+   work synchronously per event is what makes a presentation stutter. */
+let dirty2d = false, dirty3d = false;
+function draw2d(){ dirty2d = true; }
+function render3d(){ dirty3d = true; }
+
+function _draw2d(){
   const w = c2d.width, h = c2d.height;
   g2d.setTransform(1,0,0,1,0,0);
   g2d.fillStyle = "#05070c"; g2d.fillRect(0,0,w,h);
@@ -760,7 +805,7 @@ function updateDome(){
   domeMesh.userData.wire.visible = state.showDome;
 }
 
-function render3d(){ renderer.render(scene, camera); }
+function _render3d(){ renderer.render(scene, camera); }
 
 /* ===================== selection ===================== */
 function select(oid, from3d){
@@ -930,13 +975,28 @@ const zslider = document.getElementById("zslider");
 zslider.max = M.depth - 1; zslider.value = state.z;
 document.getElementById("z-max").textContent = M.depth;
 
+/* Decoding a 960x720 JPEG costs several milliseconds, so a slice that is first
+   touched during playback arrives late. Decoding a small window around the
+   current one ahead of time keeps scrubbing smooth without holding the whole
+   stack in memory. */
+const warmed = new Set();
+function warm(z, radius){
+  const lo = Math.max(0, z - radius), hi = Math.min(M.depth - 1, z + radius);
+  for (let i = lo; i <= hi; i++){
+    if (warmed.has(i)) continue;
+    const im = images[i];
+    if (im && im.decode){ warmed.add(i); im.decode().catch(() => {}); }
+  }
+}
+
 function setZ(z){
   state.z = Math.max(0, Math.min(M.depth - 1, Math.round(z)));
+  warm(state.z, 5);
   zslider.value = state.z;
   document.getElementById("z-num").textContent = state.z + 1;
   document.getElementById("z-um").textContent =
     CAL ? (state.z * M.z_um).toFixed(0) + " µm deep" : "slice index";
-  updatePlane(); updateKpis(); drawDepthChart(); drawFocusStrip();
+  updatePlane(); updateKpis(); drawDepthChart(); drawFocusStrip(); updateHud();
   draw2d(); render3d();
 }
 zslider.oninput = () => setZ(+zslider.value);
@@ -948,10 +1008,12 @@ function togglePlay(){
 }
 let lastTick = 0;
 function tick(t){
-  if (state.playing && t - lastTick > 70){
+  if (state.playing && t - lastTick > state.playMs){
     lastTick = t;
     setZ((state.z + 1) % M.depth);
   }
+  if (dirty2d){ dirty2d = false; _draw2d(); }
+  if (dirty3d){ dirty3d = false; _render3d(); }
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
@@ -967,6 +1029,7 @@ window.addEventListener("keydown", e => {
   if (e.key === "p" || e.key === "P") document.getElementById("tg-photo").click();
   if (e.key === "t" || e.key === "T") document.getElementById("btn-top").click();
   if (e.key === "d" || e.key === "D") document.getElementById("tg-dome").click();
+  if (e.key === "f" || e.key === "F") setPresent(!state.present);
   if (e.key === "1") setLayout("lay-split");
   if (e.key === "2") setLayout("lay-3d");
   if (e.key === "3") setLayout("lay-2d");
@@ -1016,6 +1079,7 @@ const fmind = document.getElementById("f-mind"), fminf = document.getElementById
 fmind.max = Math.ceil(RANGE.size[1]);
 function applyFilters(){
   state.minDiam = +fmind.value; state.minFocus = +fminf.value;
+  invalidateVisible();
   document.getElementById("o-mind").textContent = state.minDiam + " µm";
   document.getElementById("o-minf").textContent = state.minFocus.toFixed(2);
   if (state.selected !== null){
@@ -1029,9 +1093,53 @@ function applyFilters(){
 fmind.oninput = applyFilters; fminf.oninput = applyFilters;
 document.getElementById("colormode").onchange = e => {
   state.colorMode = e.target.value;
+  recolour();
   updateMeshes(); updateKpis(); renderList(); drawDepthChart(); draw2d(); render3d();
 };
 document.getElementById("sortmode").onchange = renderList;
+
+/* ===================== presentation mode ===================== */
+/* Strips the page down to the two viewports and the Z control, goes
+   fullscreen, and slows the auto-play to a speed that reads from a projector. */
+function setPresent(on){
+  state.present = on;
+  document.body.classList.toggle("present", on);
+  state.playMs = on ? 110 : 70;
+  if (on && !document.fullscreenElement){
+    document.documentElement.requestFullscreen?.().catch(() => {});
+  } else if (!on && document.fullscreenElement){
+    document.exitFullscreen?.().catch(() => {});
+  }
+  updateHud();
+  requestAnimationFrame(resize);
+}
+function updateHud(){
+  if (!state.present) return;
+  const arr = visibleList();
+  const nf = arr.filter(o => Math.abs(o.best_slice - state.z) <= 1).length;
+  document.getElementById("hud-title").textContent =
+    `${M.dataset} · ${arr.length} organoids`;
+  document.getElementById("hud-sub").textContent =
+    `slice ${state.z + 1} / ${M.depth}` +
+    (CAL ? ` · ${(state.z * M.z_um).toFixed(0)} µm deep` : "") +
+    ` · ${nf} in focus here`;
+}
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement && state.present) setPresent(false);
+});
+
+/* Decode the whole stack on demand. Worth the wait before a talk: after this
+   every slice is already decoded, so scrubbing and playback never hitch. */
+const preloadBtn = document.getElementById("preload");
+preloadBtn.onclick = async () => {
+  preloadBtn.disabled = true;
+  for (let i = 0; i < M.depth; i++){
+    preloadBtn.textContent = `Decoding ${i + 1}/${M.depth}`;
+    const im = images[i];
+    if (im && im.decode){ warmed.add(i); try { await im.decode(); } catch(e){} }
+  }
+  preloadBtn.textContent = "All slices ready";
+};
 
 /* ===================== resizing ===================== */
 function resize(){
@@ -1068,6 +1176,7 @@ resetCamera();
 resize();
 applyClipping();
 updateDome();
+recolour();
 applyFilters();
 setZ(state.z);
 </script>

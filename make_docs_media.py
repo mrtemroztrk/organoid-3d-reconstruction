@@ -403,11 +403,11 @@ def main(argv=None) -> int:
     orbit = OrbitScene(outdir / "organoids.ply", dims, substrate_um,
                        dome=dome, scale=scale)
     frames = []
-    n_orb = 40
+    n_orb = 56
     for i in range(n_orb):
         az = 360.0 * i / n_orb
         f = orbit.frame(az, 22.0)
-        ow = 820
+        ow = 760
         f = cv2.resize(f, (ow, int(f.shape[0] * ow / f.shape[1])),
                        interpolation=cv2.INTER_AREA)
         cal_txt = (f"{units['px_um']:.2f} µm/px · {units['z_um']:.0f} µm/slice"
@@ -417,7 +417,9 @@ def main(argv=None) -> int:
         frames.append(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
         print(f"\r  orbit {i + 1}/{n_orb}", end="", flush=True)
     print()
-    _save_gif(docs / "orbit.gif", frames, 0.20, palettesize=112)
+    # 56 frames over a full turn at 0.26 s each: ~15 s per revolution, and
+    # 6.4 deg per step so it still reads as motion rather than stepping.
+    _save_gif(docs / "orbit.gif", frames, 0.26, palettesize=112)
 
     # ------------------------------------------------------------- focus.gif
     # The core idea, on one organoid: its rim is crisp only near its own

@@ -254,6 +254,19 @@ python -m venv .venv
 
 ## Run
 
+### Control panel
+
+```bash
+./.venv/bin/python serve.py
+```
+
+Opens a local page where you browse to any Z-stack folder, set the parameters,
+start the analysis, watch the log stream, and open the resulting viewer. Standard
+library only — no server framework, nothing leaves the machine. Useful when you
+want to run a new dataset in front of an audience rather than from a terminal.
+
+### Command line
+
 ```bash
 ./.venv/bin/python run.py path/to/4x_00009 --open
 ```
@@ -355,9 +368,30 @@ step with the rings sharpening and blurring in the image.
 | `D` | fitted Matrigel dome surface on/off |
 | `1 2 3` | side by side / 3D only / photo only |
 | `O` | hide overlays, raw photo only |
+| `F` | presentation mode |
 | `Esc` | clear selection |
 
 Clicking an organoid in either pane selects it in both.
+
+### Presenting
+
+`F` strips the page to the two viewports and the Z control, goes fullscreen, and
+slows the auto-play to a speed that reads from a projector.
+
+Three things were done for the sake of smoothness, because a stuttering demo is
+worse than no demo:
+
+* **Drawing is deferred to one animation frame.** Dragging the Z slider fires
+  input events far faster than the canvas can repaint; coalescing them into a
+  single frame is most of the difference.
+* **The filtered object set and per-object colours are cached** and recomputed
+  only when a filter or the colour mode actually changes, instead of on every
+  frame.
+* **Slices are decoded ahead of the playhead.** Decoding a 960×720 JPEG costs
+  several milliseconds, so a slice first touched during playback arrives late.
+  A window around the current slice is decoded in advance, and the
+  **Preload slices** button decodes the whole stack up front — worth doing once
+  before a talk, after which nothing hitches.
 
 **Reading the outlines.** A solid coloured outline marks the slice where that
 organoid was *measured* — if it does not sit on a crisp dark rim, that organoid
