@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JX-3D · Organoid Reconstruction</title>
+<style>
+:root{
+  --bg:#0a0d14; --panel:#111725; --panel2:#161e30; --line:#222d45;
+  --fg:#e8edf7; --muted:#8b9bb8; --accent:#4dd0e1; --accent2:#ffb74d;
+  --good:#66bb6a; --bad:#ef5350;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--fg);overflow:hidden;
+  font:13px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  display:grid;grid-template-rows:auto 1fr auto;height:100vh;
+}
+/* ---------- header ---------- */
+header{
+  display:flex;align-items:center;gap:16px;padding:10px 16px;
+  background:var(--panel);border-bottom:1px solid var(--line);
+}
+header h1{font-size:15px;font-weight:650;letter-spacing:-.01em}
+header h1 span{color:var(--accent)}
+.meta{display:flex;gap:14px;color:var(--muted);font-size:11.5px;flex-wrap:wrap}
+.meta b{color:var(--fg);font-weight:600}
+.spacer{flex:1}
+/* ---------- main ---------- */
+main{display:grid;min-height:0;transition:grid-template-columns .18s ease}
+main.split{grid-template-columns:1fr 1fr 300px}
+main.only3d{grid-template-columns:0 1fr 300px}
+main.only2d{grid-template-columns:1fr 0 300px}
+main.only3d #pane2d, main.only2d #pane3d{border:none}
+.layout-switch{display:flex;gap:4px}
+.layout-switch button{
+  background:var(--panel2);color:var(--muted);border:1px solid var(--line);
+  border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;font-family:inherit;
+}
+.layout-switch button.on{background:var(--accent);color:#06222a;border-color:var(--accent);font-weight:650}
+.pane{position:relative;min-width:0;border-right:1px solid var(--line);overflow:hidden}
+.pane canvas{display:block;width:100%;height:100%}
+.pane-label{
+  position:absolute;top:10px;left:12px;z-index:5;pointer-events:none;
+  font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);text-shadow:0 1px 4px #000;
+}
+.pane-hint{
+  position:absolute;bottom:10px;left:12px;z-index:5;pointer-events:none;
+  font-size:10.5px;color:var(--muted);text-shadow:0 1px 4px #000;
+}
+.pane-slider{
+  position:absolute;bottom:34px;right:12px;z-index:6;width:170px;
+  background:rgba(17,23,37,.9);border:1px solid var(--line);border-radius:6px;padding:7px 9px;
+}
+.pane-slider label{font-size:10.5px;color:var(--muted);display:block;margin-bottom:3px}
+.pane-slider input{width:100%}
+#tooltip{
+  position:fixed;z-index:50;pointer-events:none;display:none;
+  background:rgba(10,13,20,.94);border:1px solid var(--line);border-radius:6px;
+  padding:7px 10px;font-size:11.5px;white-space:nowrap;
+  box-shadow:0 6px 20px rgba(0,0,0,.6);
+}
+/* ---------- toolbar over 2D ---------- */
+.tools{
+  position:absolute;top:8px;right:10px;z-index:6;display:flex;gap:6px;flex-wrap:wrap;
+  justify-content:flex-end;max-width:70%;
+}
+.tools button, .tools select{
+  background:rgba(17,23,37,.9);color:var(--fg);border:1px solid var(--line);
+  border-radius:5px;padding:4px 9px;font-size:11px;cursor:pointer;font-family:inherit;
+}
+.tools button:hover{border-color:var(--accent)}
+.tools button.on{background:var(--accent);color:#06222a;border-color:var(--accent);font-weight:600}
+/* ---------- sidebar ---------- */
+aside{background:var(--panel);overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:11px}
+.card h2{
+  font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--muted);font-weight:650;margin-bottom:9px;
+}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.kpi{background:rgba(0,0,0,.25);border-radius:6px;padding:7px 9px}
+.kpi .l{font-size:10px;color:var(--muted)}
+.kpi .v{font-size:16px;font-weight:680;margin-top:1px;letter-spacing:-.02em}
+.kpi .u{font-size:10px;color:var(--muted);font-weight:400}
+.row{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px}
+.row label{font-size:11.5px;color:var(--muted)}
+.row output{font-size:11.5px;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--accent);height:16px}
+select{
+  width:100%;background:#0d1220;color:var(--fg);border:1px solid var(--line);
+  border-radius:5px;padding:5px 7px;font-size:11.5px;font-family:inherit;
+}
+.list{max-height:230px;overflow-y:auto;display:flex;flex-direction:column;gap:4px}
+.item{
+  display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:5px;
+  background:rgba(0,0,0,.22);cursor:pointer;font-size:11.5px;border:1px solid transparent;
+}
+.item:hover{background:rgba(77,208,225,.1)}
+.item.sel{border-color:var(--accent);background:rgba(77,208,225,.16)}
+.dot{width:9px;height:9px;border-radius:50%;flex:none}
+.item .n{flex:1;font-weight:600}
+.item .d{color:var(--muted);font-variant-numeric:tabular-nums}
+.legend{display:flex;align-items:center;gap:7px;margin-top:8px;font-size:10px;color:var(--muted)}
+.legend .bar{flex:1;height:7px;border-radius:4px}
+canvas.chart{width:100%;display:block;border-radius:5px;background:rgba(0,0,0,.25);margin-top:6px}
+.note{font-size:10.5px;color:var(--muted);line-height:1.45;margin-top:7px}
+/* ---------- footer / z slider ---------- */
+footer{
+  background:var(--panel);border-top:1px solid var(--line);
+  padding:8px 16px;display:flex;align-items:center;gap:14px;
+}
+footer .zlab{font-size:12px;font-variant-numeric:tabular-nums;min-width:190px}
+footer .zlab b{color:var(--accent);font-size:14px}
+#zslider{flex:1;accent-color:var(--accent)}
+#focusstrip{width:230px;height:34px;display:block;border-radius:4px;background:rgba(0,0,0,.3)}
+.btn{
+  background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:5px;
+  padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit;
+}
+.btn:hover{border-color:var(--accent)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:#2a3550;border-radius:4px}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>JX-3D <span>·</span> Organoid Reconstruction</h1>
+  <div class="meta" id="meta"></div>
+  <div class="spacer"></div>
+  <div class="layout-switch">
+    <button id="lay-split" class="on" title="Raw image and 3D side by side">Side by side</button>
+    <button id="lay-3d" title="3D only (S: slice mode)">3D only</button>
+    <button id="lay-2d" title="Raw image only">Photo only</button>
+  </div>
+  <div class="meta"><span id="focuscount"></span></div>
+</header>
+
+<main class="split">
+  <!-- ---------- 2D raw image + overlay ---------- -->
+  <section class="pane" id="pane2d">
+    <canvas id="c2d"></canvas>
+    <div class="pane-label">Raw microscope image</div>
+    <div class="pane-hint">Wheel: zoom · Drag: pan · Click: select organoid · ← → : slice</div>
+    <div class="tools">
+      <button id="tg-focus" class="on" title="Measured outline of organoids whose focal plane is this slice">In focus</button>
+      <button id="tg-cross" class="on" title="Cross-section of the model at this slice">Cross-sections</button>
+      <button id="tg-id" title="Organoid numbers">ID</button>
+      <button id="tg-raw" title="Hide all overlays (O)">Photo only</button>
+      <button id="btn-fit" title="Fit to view">⤢</button>
+    </div>
+  </section>
+
+  <!-- ---------- 3D reconstruction ---------- -->
+  <section class="pane" id="pane3d">
+    <canvas id="c3d"></canvas>
+    <div class="pane-label">3D reconstruction</div>
+    <div class="pane-hint">Left drag: rotate · Right drag: pan · Wheel: zoom · Click: select &nbsp;|&nbsp; <b>S</b>: slice mode · <b>P</b>: photo plane · <b>T</b>: top view · <b>2</b>: fullscreen 3D</div>
+    <div class="tools">
+      <button id="tg-photo" class="on" title="Show the raw slice as a textured plane inside the 3D scene (P)">Photo plane</button>
+      <button id="tg-clip" title="Slicer: clip everything above the plane so organoid cross-sections sit on the photo (S)">Slice mode</button>
+      <button id="tg-box" class="on" title="Volume bounds">Box</button>
+      <button id="btn-reset3d" title="Reset camera">⟲</button>
+      <button id="btn-top" title="Top view — same angle as the microscope (T)">Top</button>
+    </div>
+    <div class="pane-slider">
+      <label>Photo opacity <span id="val-popacity">0.95</span></label>
+      <input type="range" id="slider-popacity" min="0.1" max="1" step="0.05" value="0.95">
+    </div>
+  </section>
+
+  <!-- ---------- sidebar ---------- -->
+  <aside>
+    <div class="card">
+      <h2>Summary</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="l">Organoids</div><div class="v" id="k-count">0</div></div>
+        <div class="kpi"><div class="l">Median diameter</div><div class="v" id="k-diam">0<span class="u"> µm</span></div></div>
+        <div class="kpi"><div class="l">Total volume</div><div class="v" id="k-vol">0<span class="u"> nl</span></div></div>
+        <div class="kpi"><div class="l">Depth range</div><div class="v" id="k-depth">0<span class="u"> µm</span></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Filters</h2>
+      <div class="row"><label>Min. diameter</label><output id="o-mind">—</output></div>
+      <input type="range" id="f-mind" min="0" max="400" step="5" value="0">
+      <div class="row" style="margin-top:9px"><label>Min. focus sharpness</label><output id="o-minf">—</output></div>
+      <input type="range" id="f-minf" min="0" max="0.9" step="0.01" value="0.25">
+      <div class="note">Focus sharpness = how prominent a peak the organoid's rim makes along Z. Low values are out-of-focus ghosts.</div>
+    </div>
+
+    <div class="card">
+      <h2>Colour by</h2>
+      <select id="colormode">
+        <option value="depth">Depth (Z)</option>
+        <option value="size">Diameter</option>
+        <option value="focus">Focus sharpness</option>
+        <option value="id">Organoid ID</option>
+      </select>
+      <div class="legend"><span id="lg-lo">—</span><div class="bar" id="lg-bar"></div><span id="lg-hi">—</span></div>
+    </div>
+
+    <div class="card">
+      <h2>Depth distribution</h2>
+      <canvas class="chart" id="ch-depth" width="276" height="120"></canvas>
+      <div class="note">Where organoids sit within the dome. Red line = current slice.</div>
+    </div>
+
+    <div class="card">
+      <h2>Diameter distribution</h2>
+      <canvas class="chart" id="ch-size" width="276" height="110"></canvas>
+    </div>
+
+    <div class="card">
+      <h2>Organoids <span id="listcount" style="color:var(--muted);font-weight:400"></span></h2>
+      <select id="sortmode" style="margin-bottom:7px">
+        <option value="depth">By depth</option>
+        <option value="size">By diameter (large→small)</option>
+        <option value="focus">By focus sharpness</option>
+      </select>
+      <div class="list" id="list"></div>
+    </div>
+
+    <div class="card" id="detail" style="display:none">
+      <h2>Selected organoid</h2>
+      <div id="detail-body"></div>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <button class="btn" id="btn-play" title="Space">▶</button>
+  <div class="zlab">Slice <b id="z-num">1</b> / <span id="z-max">1</span> &nbsp;·&nbsp; <span id="z-um">0 µm</span></div>
+  <input type="range" id="zslider" min="0" max="1" value="0">
+  <canvas id="focusstrip" width="460" height="68"></canvas>
+</footer>
+
+<div id="tooltip"></div>
+
+<script>/*__THREE__*/</script>
+<script>
+"use strict";
+const DATA = /*__DATA__*/;
+const SLICES = /*__SLICES__*/;
+
+const M = DATA.meta;
+const ORG = DATA.organoids;
+const NTHETA = M.n_theta;
+const COS = [], SIN = [];
+for (let i = 0; i < NTHETA; i++) {
+  const a = 2 * Math.PI * i / NTHETA;
+  COS.push(Math.cos(a)); SIN.push(Math.sin(a));
+}
+
+/* ===================== state ===================== */
+const state = {
+  z: Math.round(M.depth / 3),
+  selected: null,
+  hover: null,
+  showFocus: true, showCross: true, showId: false, rawOnly: false,
+  showPhoto: true, showBox: true, clip: false,
+  minDiam: 0, minFocus: 0.25,
+  colorMode: "depth",
+  playing: false,
+};
+
+/* ===================== colour ===================== */
+// short, readable turbo-like ramp
+const RAMP = [[48,18,59],[70,107,227],[35,187,213],[103,234,124],
+              [224,224,49],[251,144,44],[221,53,15],[122,4,3]];
+function ramp(t){
+  t = Math.max(0, Math.min(1, t));
+  const x = t * (RAMP.length - 1), i = Math.min(RAMP.length - 2, Math.floor(x)), f = x - i;
+  const a = RAMP[i], b = RAMP[i+1];
+  return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f];
+}
+function rampCss(t){ const c = ramp(t).map(v=>Math.round(v)); return `rgb(${c[0]},${c[1]},${c[2]})`; }
+
+const RANGE = {
+  depth: [Math.min(...ORG.map(o=>o.z_um)), Math.max(...ORG.map(o=>o.z_um))],
+  size:  [Math.min(...ORG.map(o=>o.diameter_um)), Math.max(...ORG.map(o=>o.diameter_um))],
+  focus: [0, 1],
+};
+function colorValue(o){
+  if (state.colorMode === "id") return ((o.oid * 0.381966) % 1);
+  const r = RANGE[state.colorMode] || RANGE.depth;
+  const v = state.colorMode === "depth" ? o.z_um
+          : state.colorMode === "size"  ? o.diameter_um
+          : o.focus_sharpness;
+  return (v - r[0]) / Math.max(1e-6, r[1] - r[0]);
+}
+function orgColor(o){ return rampCss(colorValue(o)); }
+
+/* ===================== filtering ===================== */
+function visible(o){
+  return o.diameter_um >= state.minDiam && o.focus_sharpness >= state.minFocus;
+}
+function visibleList(){ return ORG.filter(visible); }
+
+/* ===================== geometry helpers ===================== */
+// Radius scale of the model's cross-section at depth `zUm` (null if it does not reach)
+function crossScale(o, zUm){
+  const dz = zUm - o.z_um;
+  const rz = o.radius_z_um;
+  if (rz <= 0 || Math.abs(dz) >= rz) return null;
+  return Math.sqrt(1 - (dz / rz) * (dz / rz));
+}
+// Cross-section polygon in pixel coordinates
+function crossPolygonPx(o, scale){
+  const pts = new Array(NTHETA);
+  for (let i = 0; i < NTHETA; i++){
+    const r = o.radial_profile_um[i] * scale / M.px_um;
+    pts[i] = [o.cx_px + r * COS[i], o.cy_px + r * SIN[i]];
+  }
+  return pts;
+}
+function pointInPoly(px, py, poly){
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++){
+    const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+    if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) inside = !inside;
+  }
+  return inside;
+}
+
+/* ===================== 2D viewer ===================== */
+const c2d = document.getElementById("c2d");
+const g2d = c2d.getContext("2d");
+const images = new Array(M.depth).fill(null);
+let imagesReady = 0;
+const view2d = { scale: 1, tx: 0, ty: 0, fitted: false };
+
+for (let i = 0; i < SLICES.length; i++){
+  const im = new Image();
+  im.onload = () => {
+    imagesReady++;
+    if (i === state.z){ draw2d(); if (typeof updatePlane === "function"){ updatePlane(); render3d(); } }
+  };
+  im.src = SLICES[i];
+  images[i] = im;
+}
+
+function fit2d(){
+  const w = c2d.width, h = c2d.height;
+  const s = Math.min(w / M.width, h / M.height);
+  view2d.scale = s;
+  view2d.tx = (w - M.width * s) / 2;
+  view2d.ty = (h - M.height * s) / 2;
+  view2d.fitted = true;
+}
+function toScreen(x, y){ return [x * view2d.scale + view2d.tx, y * view2d.scale + view2d.ty]; }
+function toImage(sx, sy){ return [(sx - view2d.tx) / view2d.scale, (sy - view2d.ty) / view2d.scale]; }
+
+function draw2d(){
+  const w = c2d.width, h = c2d.height;
+  g2d.setTransform(1,0,0,1,0,0);
+  g2d.fillStyle = "#05070c"; g2d.fillRect(0,0,w,h);
+  if (!view2d.fitted) fit2d();
+
+  const img = images[state.z];
+  if (img && img.complete){
+    g2d.imageSmoothingEnabled = view2d.scale < 2;
+    g2d.drawImage(img, view2d.tx, view2d.ty, M.width * view2d.scale, M.height * view2d.scale);
+  }
+  if (state.rawOnly) return;
+
+  const zUm = state.z * M.z_um;
+  g2d.lineJoin = "round";
+
+  for (const o of visibleList()){
+    const inFocus = Math.abs(o.best_slice - state.z) <= 1;
+    const s = crossScale(o, zUm);
+    if (s === null) continue;
+    if (inFocus && !state.showFocus) continue;
+    if (!inFocus && !state.showCross) continue;
+
+    const poly = crossPolygonPx(o, s);
+    g2d.beginPath();
+    for (let i = 0; i < poly.length; i++){
+      const p = toScreen(poly[i][0], poly[i][1]);
+      i === 0 ? g2d.moveTo(p[0], p[1]) : g2d.lineTo(p[0], p[1]);
+    }
+    g2d.closePath();
+
+    const sel = state.selected === o.oid, hov = state.hover === o.oid;
+    if (inFocus){
+      g2d.setLineDash([]);
+      g2d.strokeStyle = sel ? "#ffffff" : orgColor(o);
+      g2d.lineWidth = sel ? 3 : 2;
+      g2d.globalAlpha = 1;
+    } else {
+      g2d.setLineDash([4, 4]);
+      g2d.strokeStyle = sel ? "#ffffff" : orgColor(o);
+      g2d.lineWidth = sel ? 2 : 1;
+      g2d.globalAlpha = sel ? .85 : .38;
+    }
+    g2d.stroke();
+
+    if (sel || hov){
+      g2d.globalAlpha = .16; g2d.fillStyle = orgColor(o); g2d.fill();
+    }
+    g2d.globalAlpha = 1; g2d.setLineDash([]);
+
+    if (state.showId && (inFocus || sel)){
+      const p = toScreen(o.cx_px, o.cy_px);
+      g2d.font = "600 11px ui-sans-serif,system-ui";
+      g2d.textAlign = "center"; g2d.textBaseline = "middle";
+      g2d.lineWidth = 3; g2d.strokeStyle = "rgba(0,0,0,.75)";
+      g2d.strokeText(o.oid, p[0], p[1]);
+      g2d.fillStyle = "#fff"; g2d.fillText(o.oid, p[0], p[1]);
+    }
+  }
+}
+
+function organoidAt(ix, iy){
+  const zUm = state.z * M.z_um;
+  let best = null, bestArea = Infinity;
+  for (const o of visibleList()){
+    const s = crossScale(o, zUm);
+    if (s === null) continue;
+    const poly = crossPolygonPx(o, s);
+    if (pointInPoly(ix, iy, poly)){
+      const a = o.area_um2 * s * s;
+      if (a < bestArea){ bestArea = a; best = o; }   // prefer the smallest, for nested outlines
+    }
+  }
+  return best;
+}
+
+/* --- 2D mouse --- */
+let drag2d = null;
+c2d.addEventListener("mousedown", e => { drag2d = { x: e.clientX, y: e.clientY, tx: view2d.tx, ty: view2d.ty, moved: false }; });
+window.addEventListener("mouseup", () => { drag2d = null; });
+c2d.addEventListener("mousemove", e => {
+  const r = c2d.getBoundingClientRect();
+  if (drag2d){
+    const dx = e.clientX - drag2d.x, dy = e.clientY - drag2d.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag2d.moved = true;
+    view2d.tx = drag2d.tx + dx; view2d.ty = drag2d.ty + dy;
+    draw2d(); return;
+  }
+  const [ix, iy] = toImage(e.clientX - r.left, e.clientY - r.top);
+  const o = organoidAt(ix, iy);
+  const id = o ? o.oid : null;
+  if (id !== state.hover){ state.hover = id; draw2d(); }
+  showTooltip(e, o);
+});
+c2d.addEventListener("mouseleave", () => { state.hover = null; hideTooltip(); draw2d(); });
+c2d.addEventListener("click", e => {
+  if (drag2d && drag2d.moved) return;
+  const r = c2d.getBoundingClientRect();
+  const [ix, iy] = toImage(e.clientX - r.left, e.clientY - r.top);
+  const o = organoidAt(ix, iy);
+  select(o ? o.oid : null, false);
+});
+c2d.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = c2d.getBoundingClientRect();
+  const sx = e.clientX - r.left, sy = e.clientY - r.top;
+  const [ix, iy] = toImage(sx, sy);
+  const k = Math.exp(-e.deltaY * 0.0015);
+  view2d.scale = Math.max(0.15, Math.min(20, view2d.scale * k));
+  view2d.tx = sx - ix * view2d.scale;
+  view2d.ty = sy - iy * view2d.scale;
+  draw2d();
+}, { passive: false });
+
+/* ===================== tooltip ===================== */
+const tip = document.getElementById("tooltip");
+function showTooltip(e, o){
+  if (!o){ hideTooltip(); return; }
+  tip.style.display = "block";
+  tip.style.left = (e.clientX + 14) + "px";
+  tip.style.top  = (e.clientY + 14) + "px";
+  tip.innerHTML = `<b>#${o.oid}</b> · ${o.diameter_um.toFixed(0)} µm diameter<br>
+    <span style="color:var(--muted)">focal slice</span> ${o.best_slice + 1}
+    <span style="color:var(--muted)">· depth</span> ${o.z_um.toFixed(0)} µm`;
+}
+function hideTooltip(){ tip.style.display = "none"; }
+
+/* ===================== 3D ===================== */
+const c3d = document.getElementById("c3d");
+const renderer = new THREE.WebGLRenderer({ canvas: c3d, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070c);
+const camera = new THREE.PerspectiveCamera(42, 1, 1, 40000);
+
+const VOL = { x: M.width * M.px_um, y: M.height * M.px_um, z: M.depth * M.z_um };
+const CENTER = new THREE.Vector3(VOL.x / 2, VOL.y / 2, VOL.z / 2);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.62));
+const key = new THREE.DirectionalLight(0xffffff, 0.85); key.position.set(1, -1.2, 1.4); scene.add(key);
+const fill = new THREE.DirectionalLight(0x88bbff, 0.3); fill.position.set(-1, 1, -0.5); scene.add(fill);
+
+/* --- volume box --- */
+const boxGroup = new THREE.Group();
+{
+  const g = new THREE.BoxGeometry(VOL.x, VOL.y, VOL.z);
+  const e = new THREE.LineSegments(new THREE.EdgesGeometry(g),
+      new THREE.LineBasicMaterial({ color: 0x24304a }));
+  e.position.copy(CENTER);
+  boxGroup.add(e);
+}
+scene.add(boxGroup);
+
+/* --- organoid meshes --- */
+const meshes = new Map();
+const pickables = [];
+function buildSpheroid(o, nPhi){
+  const nT = NTHETA;
+  const pos = [], idx = [], nrm = [];
+  for (let i = 0; i < nPhi; i++){
+    const phi = Math.PI * i / (nPhi - 1);
+    const sp = Math.sin(phi), cp = Math.cos(phi);
+    for (let j = 0; j < nT; j++){
+      const r = o.radial_profile_um[j];
+      pos.push(r * sp * COS[j], r * sp * SIN[j], o.radius_z_um * cp);
+      const n = new THREE.Vector3(sp * COS[j] / Math.max(r, 1e-6),
+                                  sp * SIN[j] / Math.max(r, 1e-6),
+                                  cp / Math.max(o.radius_z_um, 1e-6)).normalize();
+      nrm.push(n.x, n.y, n.z);
+    }
+  }
+  for (let i = 0; i < nPhi - 1; i++){
+    for (let j = 0; j < nT; j++){
+      const j2 = (j + 1) % nT;
+      const a = i * nT + j, b = i * nT + j2, c = (i + 1) * nT + j, d = (i + 1) * nT + j2;
+      idx.push(a, c, d, a, d, b);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute("normal", new THREE.Float32BufferAttribute(nrm, 3));
+  geo.setIndex(idx);
+  return geo;
+}
+for (const o of ORG){
+  const mat = new THREE.MeshPhongMaterial({ color: 0xffffff, shininess: 42, specular: 0x223344,
+                                            transparent: true, opacity: 0.94 });
+  const mesh = new THREE.Mesh(buildSpheroid(o, M.n_phi), mat);
+  mesh.position.set(o.x_um, o.y_um, o.z_um);
+  mesh.userData.oid = o.oid;
+  scene.add(mesh);
+  meshes.set(o.oid, mesh);
+  pickables.push(mesh);
+}
+
+/* --- slicer: the raw slice as a textured plane inside the 3D scene ---
+   The photograph is placed at its own Z depth inside the volume, so the organoid
+   models sit above and below the very image they were measured from. `flipY=false`
+   is required: otherwise the texture is mirrored vertically and stops lining up
+   with the 2D overlay. */
+const sliceTex = new THREE.Texture();
+sliceTex.flipY = false;
+sliceTex.colorSpace = THREE.SRGBColorSpace;
+sliceTex.minFilter = THREE.LinearFilter;
+sliceTex.magFilter = THREE.LinearFilter;
+sliceTex.generateMipmaps = false;
+
+const planeMat = new THREE.MeshBasicMaterial({
+  map: sliceTex, color: 0xffffff, transparent: true, opacity: 0.95,
+  side: THREE.DoubleSide, depthWrite: false, toneMapped: false });
+const plane = new THREE.Mesh(new THREE.PlaneGeometry(VOL.x, VOL.y), planeMat);
+plane.position.set(VOL.x / 2, VOL.y / 2, 0);
+const planeEdge = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.PlaneGeometry(VOL.x, VOL.y)),
+  new THREE.LineBasicMaterial({ color: 0x4dd0e1, transparent: true, opacity: 0.7 }));
+planeEdge.position.copy(plane.position);
+const planeGroup = new THREE.Group(); planeGroup.add(plane); planeGroup.add(planeEdge);
+scene.add(planeGroup);
+
+/* Slice mode: clip away everything above the plane so the organoids' cross
+   sections are left exposed on top of the photograph. */
+renderer.localClippingEnabled = true;
+const clipPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+
+function updatePlane(){
+  const z = state.z * M.z_um;
+  plane.position.z = z; planeEdge.position.z = z;
+  planeGroup.visible = state.showPhoto;
+
+  const img = images[state.z];
+  if (img && img.complete && sliceTex.image !== img){
+    sliceTex.image = img;
+    sliceTex.needsUpdate = true;
+  }
+  // keeps n·p + c > 0  ->  z beyond the current depth, i.e. below the photograph
+  clipPlane.constant = -z;
+}
+
+function applyClipping(){
+  for (const m of meshes.values()){
+    m.material.clippingPlanes = state.clip ? [clipPlane] : null;
+    m.material.side = state.clip ? THREE.DoubleSide : THREE.FrontSide;
+    m.material.needsUpdate = true;
+  }
+}
+
+/* --- minimal orbit controls --- */
+const orbit = {
+  target: CENTER.clone(),
+  radius: Math.max(VOL.x, VOL.y, VOL.z) * 1.5,
+  theta: -Math.PI / 2.6, phi: 1.15,
+};
+function applyCamera(){
+  const st = Math.sin(orbit.phi), ct = Math.cos(orbit.phi);
+  camera.position.set(
+    orbit.target.x + orbit.radius * st * Math.cos(orbit.theta),
+    orbit.target.y + orbit.radius * st * Math.sin(orbit.theta),
+    orbit.target.z + orbit.radius * ct);
+  camera.up.set(0, 0, -1);            // Z points down, matching depth in the stack
+  camera.lookAt(orbit.target);
+}
+function resetCamera(){
+  orbit.target.copy(CENTER);
+  orbit.radius = Math.max(VOL.x, VOL.y, VOL.z) * 1.5;
+  orbit.theta = -Math.PI / 2.6; orbit.phi = 1.15;
+  applyCamera();
+}
+// Microscope view: straight down, the angle that lines up with the raw photograph
+function topCamera(){
+  orbit.target.copy(CENTER);
+  orbit.radius = Math.max(VOL.x, VOL.y) * 1.25;
+  orbit.theta = -Math.PI / 2; orbit.phi = 0.32;
+  applyCamera();
+}
+let drag3d = null;
+c3d.addEventListener("contextmenu", e => e.preventDefault());
+c3d.addEventListener("mousedown", e => {
+  drag3d = { x: e.clientX, y: e.clientY, btn: e.button, moved: false,
+             theta: orbit.theta, phi: orbit.phi, target: orbit.target.clone() };
+});
+window.addEventListener("mouseup", () => { drag3d = null; });
+window.addEventListener("mousemove", e => {
+  if (!drag3d) return;
+  const dx = e.clientX - drag3d.x, dy = e.clientY - drag3d.y;
+  if (Math.abs(dx) + Math.abs(dy) > 3) drag3d.moved = true;
+  if (drag3d.btn === 0){
+    orbit.theta = drag3d.theta + dx * 0.006;
+    // up is ±Z, so lookAt degenerates near the poles -- stay away from them
+    orbit.phi = Math.max(0.30, Math.min(Math.PI - 0.30, drag3d.phi + dy * 0.006));
+  } else {
+    const right = new THREE.Vector3().crossVectors(
+        new THREE.Vector3().subVectors(camera.position, orbit.target).normalize(), camera.up).normalize();
+    const up = new THREE.Vector3().crossVectors(right,
+        new THREE.Vector3().subVectors(camera.position, orbit.target).normalize()).normalize();
+    const k = orbit.radius * 0.0016;
+    orbit.target.copy(drag3d.target).addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+  }
+  applyCamera();
+});
+c3d.addEventListener("wheel", e => {
+  e.preventDefault();
+  orbit.radius = Math.max(60, Math.min(60000, orbit.radius * Math.exp(e.deltaY * 0.0012)));
+  applyCamera();
+}, { passive: false });
+
+const ray = new THREE.Raycaster();
+c3d.addEventListener("click", e => {
+  if (drag3d && drag3d.moved) return;
+  const r = c3d.getBoundingClientRect();
+  const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1,
+                                -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObjects(pickables.filter(m => m.visible), false);
+  select(hits.length ? hits[0].object.userData.oid : null, true);
+});
+
+function updateMeshes(){
+  for (const o of ORG){
+    const m = meshes.get(o.oid);
+    const vis = visible(o);
+    m.visible = vis;
+    if (!vis) continue;
+    const sel = state.selected === o.oid;
+    const c = ramp(colorValue(o));
+    m.material.color.setRGB(c[0]/255, c[1]/255, c[2]/255);
+    m.material.emissive.setHex(sel ? 0x335566 : 0x000000);
+    m.material.opacity = state.selected === null ? 0.94 : (sel ? 1.0 : 0.28);
+  }
+  boxGroup.visible = state.showBox;
+}
+
+function render3d(){ renderer.render(scene, camera); }
+
+/* ===================== selection ===================== */
+function select(oid, from3d){
+  state.selected = (state.selected === oid) ? null : oid;
+  const o = ORG.find(x => x.oid === state.selected);
+  if (o){
+    if (from3d) setZ(o.best_slice);
+    orbit.target.set(o.x_um, o.y_um, o.z_um);
+    applyCamera();
+  }
+  renderDetail(o);
+  renderList();
+  updateMeshes(); render3d(); draw2d();
+}
+
+function renderDetail(o){
+  const box = document.getElementById("detail");
+  if (!o){ box.style.display = "none"; return; }
+  box.style.display = "block";
+  const rows = [
+    ["Diameter", o.diameter_um.toFixed(1) + " µm"],
+    ["Equatorial area", o.area_um2.toFixed(0) + " µm²"],
+    ["Volume", (o.volume_um3 / 1e6).toFixed(3) + " nl"],
+    ["Depth (Z)", o.z_um.toFixed(1) + " µm"],
+    ["Focal slice", (o.best_slice + 1) + " / " + M.depth],
+    ["Focus sharpness", o.focus_sharpness.toFixed(2)],
+    ["Circularity", o.circularity.toFixed(2)],
+    ["Slices in focus", o.n_slices],
+    ["XY position", `${o.x_um.toFixed(0)}, ${o.y_um.toFixed(0)} µm`],
+  ];
+  document.getElementById("detail-body").innerHTML =
+    `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+       <span class="dot" style="background:${orgColor(o)};width:12px;height:12px"></span>
+       <b style="font-size:14px">Organoid #${o.oid}</b></div>` +
+    rows.map(([k, v]) =>
+      `<div class="row" style="margin-bottom:4px"><label>${k}</label><output>${v}</output></div>`).join("") +
+    `<button class="btn" style="width:100%;margin-top:8px" onclick="setZ(${o.best_slice})">Go to focal slice →</button>`;
+}
+
+/* ===================== list & charts ===================== */
+function renderList(){
+  const mode = document.getElementById("sortmode").value;
+  const arr = visibleList().slice();
+  arr.sort(mode === "size"  ? (a,b) => b.diameter_um - a.diameter_um
+        :  mode === "focus" ? (a,b) => b.focus_sharpness - a.focus_sharpness
+        :                     (a,b) => a.z_um - b.z_um);
+  document.getElementById("listcount").textContent = `(${arr.length})`;
+  document.getElementById("list").innerHTML = arr.map(o => `
+    <div class="item ${state.selected === o.oid ? "sel" : ""}" data-oid="${o.oid}">
+      <span class="dot" style="background:${orgColor(o)}"></span>
+      <span class="n">#${o.oid}</span>
+      <span class="d">${o.diameter_um.toFixed(0)} µm · Z${o.best_slice + 1}</span>
+    </div>`).join("");
+  for (const el of document.querySelectorAll(".item")){
+    el.onclick = () => { const id = +el.dataset.oid; state.selected = null; select(id, true); };
+  }
+}
+
+function drawDepthChart(){
+  const cv = document.getElementById("ch-depth"), g = cv.getContext("2d");
+  const W = cv.width, H = cv.height, pad = 4;
+  g.clearRect(0, 0, W, H);
+  const nb = 28, bins = new Array(nb).fill(0);
+  const arr = visibleList();
+  for (const o of arr) bins[Math.min(nb - 1, Math.floor(o.z_slice / M.depth * nb))]++;
+  const mx = Math.max(1, ...bins);
+  const bw = (W - 2 * pad) / nb;
+  for (let i = 0; i < nb; i++){
+    const h = (bins[i] / mx) * (H - 2 * pad);
+    g.fillStyle = rampCss(i / (nb - 1));
+    g.globalAlpha = 0.85;
+    g.fillRect(pad + i * bw, H - pad - h, Math.max(1, bw - 1), h);
+  }
+  g.globalAlpha = 1;
+  const x = pad + (state.z / M.depth) * (W - 2 * pad);
+  g.strokeStyle = "#ef5350"; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
+  g.fillStyle = "#8b9bb8"; g.font = "9px ui-sans-serif";
+  g.fillText("top", 5, 10); g.textAlign = "right"; g.fillText("glass", W - 5, 10); g.textAlign = "left";
+}
+
+function drawSizeChart(){
+  const cv = document.getElementById("ch-size"), g = cv.getContext("2d");
+  const W = cv.width, H = cv.height, pad = 4;
+  g.clearRect(0, 0, W, H);
+  const arr = visibleList();
+  if (!arr.length) return;
+  const mxd = Math.max(...arr.map(o => o.diameter_um));
+  const nb = 24, bins = new Array(nb).fill(0);
+  for (const o of arr) bins[Math.min(nb - 1, Math.floor(o.diameter_um / mxd * nb))]++;
+  const mx = Math.max(1, ...bins), bw = (W - 2 * pad) / nb;
+  for (let i = 0; i < nb; i++){
+    const h = (bins[i] / mx) * (H - 16);
+    g.fillStyle = "#4dd0e1"; g.globalAlpha = 0.8;
+    g.fillRect(pad + i * bw, H - 12 - h, Math.max(1, bw - 1), h);
+  }
+  g.globalAlpha = 1; g.fillStyle = "#8b9bb8"; g.font = "9px ui-sans-serif";
+  g.fillText("0", 4, H - 2);
+  g.textAlign = "right"; g.fillText(mxd.toFixed(0) + " µm", W - 4, H - 2); g.textAlign = "left";
+}
+
+function drawFocusStrip(){
+  const cv = document.getElementById("focusstrip"), g = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  g.clearRect(0, 0, W, H);
+  const p = M.focus_profile;
+  const mx = Math.max(...p), mn = Math.min(...p);
+  g.beginPath();
+  for (let i = 0; i < p.length; i++){
+    const x = (i / (p.length - 1)) * W;
+    const y = H - 3 - ((p[i] - mn) / Math.max(1e-9, mx - mn)) * (H - 8);
+    i === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+  }
+  g.strokeStyle = "#4a5a7a"; g.lineWidth = 1; g.stroke();
+  // substrate plane
+  const xs = (M.substrate_slice / (p.length - 1)) * W;
+  g.strokeStyle = "#ffb74d"; g.setLineDash([3,3]);
+  g.beginPath(); g.moveTo(xs, 0); g.lineTo(xs, H); g.stroke(); g.setLineDash([]);
+  // odak dilimi olan organoidler
+  g.fillStyle = "#4dd0e1";
+  for (const o of visibleList()){
+    const x = (o.best_slice / (p.length - 1)) * W;
+    g.globalAlpha = .5; g.fillRect(x, H - 3, 1.5, 3);
+  }
+  g.globalAlpha = 1;
+  const x = (state.z / (p.length - 1)) * W;
+  g.strokeStyle = "#ef5350"; g.lineWidth = 1.5;
+  g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H); g.stroke();
+  g.fillStyle = "#8b9bb8"; g.font = "9px ui-sans-serif";
+  g.fillText("focus profile", 4, 10);
+  g.fillStyle = "#ffb74d"; g.fillText("glass", Math.min(W - 30, xs + 3), H - 6);
+}
+
+function updateKpis(){
+  const arr = visibleList();
+  document.getElementById("k-count").textContent = arr.length;
+  const dm = arr.map(o => o.diameter_um).sort((a,b) => a - b);
+  document.getElementById("k-diam").innerHTML =
+    (dm.length ? dm[Math.floor(dm.length/2)].toFixed(0) : "0") + '<span class="u"> µm</span>';
+  const vol = arr.reduce((s,o) => s + o.volume_um3, 0) / 1e6;
+  document.getElementById("k-vol").innerHTML = vol.toFixed(1) + '<span class="u"> nl</span>';
+  const zs = arr.map(o => o.z_um);
+  document.getElementById("k-depth").innerHTML =
+    (zs.length ? (Math.max(...zs) - Math.min(...zs)).toFixed(0) : "0") + '<span class="u"> µm</span>';
+
+  const r = RANGE[state.colorMode];
+  const unit = state.colorMode === "depth" ? " µm" : state.colorMode === "size" ? " µm" : "";
+  document.getElementById("lg-lo").textContent = state.colorMode === "id" ? "" : r[0].toFixed(0) + unit;
+  document.getElementById("lg-hi").textContent = state.colorMode === "id" ? "" : r[1].toFixed(0) + unit;
+  document.getElementById("lg-bar").style.background =
+    "linear-gradient(to right," + [0,.2,.4,.6,.8,1].map(t => rampCss(t)).join(",") + ")";
+
+  const nf = arr.filter(o => Math.abs(o.best_slice - state.z) <= 1).length;
+  document.getElementById("focuscount").innerHTML =
+    `in focus on this slice: <b>${nf}</b>`;
+}
+
+/* ===================== Z control ===================== */
+const zslider = document.getElementById("zslider");
+zslider.max = M.depth - 1; zslider.value = state.z;
+document.getElementById("z-max").textContent = M.depth;
+
+function setZ(z){
+  state.z = Math.max(0, Math.min(M.depth - 1, Math.round(z)));
+  zslider.value = state.z;
+  document.getElementById("z-num").textContent = state.z + 1;
+  document.getElementById("z-um").textContent = (state.z * M.z_um).toFixed(0) + " µm deep";
+  updatePlane(); updateKpis(); drawDepthChart(); drawFocusStrip();
+  draw2d(); render3d();
+}
+zslider.oninput = () => setZ(+zslider.value);
+
+document.getElementById("btn-play").onclick = togglePlay;
+function togglePlay(){
+  state.playing = !state.playing;
+  document.getElementById("btn-play").textContent = state.playing ? "⏸" : "▶";
+}
+let lastTick = 0;
+function tick(t){
+  if (state.playing && t - lastTick > 70){
+    lastTick = t;
+    setZ((state.z + 1) % M.depth);
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+window.addEventListener("keydown", e => {
+  if (e.key === "ArrowLeft")  { setZ(state.z - 1); e.preventDefault(); }
+  if (e.key === "ArrowRight") { setZ(state.z + 1); e.preventDefault(); }
+  if (e.key === "ArrowDown")  { setZ(state.z - 10); e.preventDefault(); }
+  if (e.key === "ArrowUp")    { setZ(state.z + 10); e.preventDefault(); }
+  if (e.key === " ")          { togglePlay(); e.preventDefault(); }
+  if (e.key === "o" || e.key === "O") document.getElementById("tg-raw").click();
+  if (e.key === "s" || e.key === "S") document.getElementById("tg-clip").click();
+  if (e.key === "p" || e.key === "P") document.getElementById("tg-photo").click();
+  if (e.key === "t" || e.key === "T") document.getElementById("btn-top").click();
+  if (e.key === "1") setLayout("lay-split");
+  if (e.key === "2") setLayout("lay-3d");
+  if (e.key === "3") setLayout("lay-2d");
+  if (e.key === "Escape")     select(null, false);
+});
+
+/* ===================== controls ===================== */
+function toggle(id, key, after){
+  const b = document.getElementById(id);
+  b.onclick = () => {
+    state[key] = !state[key];
+    b.classList.toggle("on", state[key]);
+    if (after) after();
+    draw2d(); render3d();
+  };
+}
+toggle("tg-focus", "showFocus");
+toggle("tg-cross", "showCross");
+toggle("tg-id", "showId");
+toggle("tg-raw", "rawOnly");
+toggle("tg-photo", "showPhoto", updatePlane);
+toggle("tg-clip", "clip", applyClipping);
+toggle("tg-box", "showBox", updateMeshes);
+document.getElementById("btn-fit").onclick = () => { fit2d(); draw2d(); };
+document.getElementById("btn-reset3d").onclick = () => { resetCamera(); render3d(); };
+document.getElementById("btn-top").onclick = () => { topCamera(); render3d(); };
+
+document.getElementById("slider-popacity").oninput = e => {
+  planeMat.opacity = +e.target.value;
+  document.getElementById("val-popacity").textContent = (+e.target.value).toFixed(2);
+  render3d();
+};
+
+/* --- layout (side by side / 3D only / photo only) --- */
+const LAYOUTS = { "lay-split": "split", "lay-3d": "only3d", "lay-2d": "only2d" };
+for (const id of Object.keys(LAYOUTS)){
+  document.getElementById(id).onclick = () => setLayout(id);
+}
+function setLayout(id){
+  document.querySelector("main").className = LAYOUTS[id];
+  for (const k of Object.keys(LAYOUTS)) document.getElementById(k).classList.toggle("on", k === id);
+  requestAnimationFrame(resize);
+}
+
+const fmind = document.getElementById("f-mind"), fminf = document.getElementById("f-minf");
+fmind.max = Math.ceil(RANGE.size[1]);
+function applyFilters(){
+  state.minDiam = +fmind.value; state.minFocus = +fminf.value;
+  document.getElementById("o-mind").textContent = state.minDiam + " µm";
+  document.getElementById("o-minf").textContent = state.minFocus.toFixed(2);
+  if (state.selected !== null){
+    const o = ORG.find(x => x.oid === state.selected);
+    if (!o || !visible(o)) state.selected = null;
+  }
+  updateMeshes(); updateKpis(); renderList();
+  drawDepthChart(); drawSizeChart(); drawFocusStrip();
+  draw2d(); render3d();
+}
+fmind.oninput = applyFilters; fminf.oninput = applyFilters;
+document.getElementById("colormode").onchange = e => {
+  state.colorMode = e.target.value;
+  updateMeshes(); updateKpis(); renderList(); drawDepthChart(); draw2d(); render3d();
+};
+document.getElementById("sortmode").onchange = renderList;
+
+/* ===================== resizing ===================== */
+function resize(){
+  for (const [cv, pane] of [[c2d, "pane2d"], [c3d, "pane3d"]]){
+    const el = document.getElementById(pane);
+    const w = el.clientWidth, h = el.clientHeight;
+    if (w < 2 || h < 2) continue;          // pane hidden by the current layout
+    if (cv === c2d){
+      // CSS pixel == canvas pixel, so overlay coordinates match the mouse exactly
+      cv.width = w; cv.height = h;
+    } else {
+      renderer.setSize(w, h, false);
+      camera.aspect = w / Math.max(1, h);
+      camera.updateProjectionMatrix();
+    }
+  }
+  view2d.fitted = false;
+  applyCamera(); draw2d(); render3d();
+}
+window.addEventListener("resize", resize);
+
+/* ===================== init ===================== */
+document.getElementById("meta").innerHTML = [
+  `<span><b>${M.dataset}</b></span>`,
+  `<span>${M.objective}</span>`,
+  `<span>${M.width}×${M.height}×${M.depth}</span>`,
+  `<span><b>${M.px_um.toFixed(2)}</b> µm/px · <b>${M.z_um.toFixed(1)}</b> µm/slice</span>`,
+  `<span>field <b>${(M.width * M.px_um / 1000).toFixed(2)}×${(M.height * M.px_um / 1000).toFixed(2)}</b> mm</span>`,
+  `<span>depth <b>${(M.depth * M.z_um / 1000).toFixed(2)}</b> mm</span>`,
+].join("");
+
+resetCamera();
+resize();
+applyClipping();
+applyFilters();
+setZ(state.z);
+</script>
+</body>
+</html>

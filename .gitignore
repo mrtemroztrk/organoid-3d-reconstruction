@@ -1,0 +1,23 @@
+# virtualenv
+.venv/
+venv/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# pipeline output (regenerate with run.py; docs/ holds the committed figures)
+output/
+
+# raw microscope data -- hundreds of MB per Z-stack, not distributable here
+BK52_WT_9805_B/
+*.tif
+*.gci
+*.ktf
+
+# editor / OS
+.claude/
+.vscode/
+.idea/
+.DS_Store

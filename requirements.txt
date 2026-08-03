@@ -1,0 +1,18 @@
+# Core pipeline
+numpy>=2.0
+scipy>=1.14
+scikit-image>=0.24
+tifffile>=2024.1
+opencv-python-headless>=4.10
+matplotlib>=3.8
+trimesh>=4.0
+
+# Offline 3D rendering (render_3d.py, make_docs_media.py)
+vtk>=9.3
+imageio>=2.34
+
+# Optional: GPU segmentation with Cellpose-SAM.
+# Without it, use --detector classical.
+#   pip install cellpose
+# Torch comes in as a cellpose dependency; install the CUDA build that matches
+# your driver from https://pytorch.org if the default wheel is CPU-only.
