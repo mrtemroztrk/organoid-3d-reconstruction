@@ -703,7 +703,7 @@ const GROUPS = [
                    "nearest_border_is_cap"]],
   ["Size", ["diameter_px","diameter_um","radius_px","area_px2","volume_voxels",
             "radius_z_slices"]],
-  ["Shape", ["circularity","solidity","convexity","radius_cv","radius_min_over_max",
+  ["Shape", ["circularity","solidity","convexity","radius_cv","shape_suspect","radius_min_over_max",
              "harmonic_1","harmonic_2","harmonic_3","harmonic_high"]],
   ["Core vs rim", ["rim_minus_core_od","core_over_rim_od","core_rim_separation",
                    "core_fill_fraction","core_od_mean","rim_od_mean","core_od_std",
@@ -717,10 +717,16 @@ const GROUPS = [
                "background_clipped_frac","lateral_spread_px","axial_spread_slices",
                "radius_ratio","missing_blocks"]],
 ];
-const FLAGS = ["clipped","clipped_everywhere","single_view_in_overlap",
-               "radius_disagreement","same_tile_twice","guarantee_void"];
-function fmt(v){
+/* Flags are shown as chips above the table, before any number, because they
+   say whether the numbers below them mean anything. */
+const FLAGS = ["shape_suspect","clipped","clipped_everywhere",
+               "single_view_in_overlap","radius_disagreement","same_tile_twice",
+               "guarantee_void"];
+const BOOLEAN_COLUMNS = new Set(["shape_suspect", "appearance_measurable",
+                                 "nearest_border_is_cap"]);
+function fmt(v, key){
   if (v === null || v === undefined || v === "") return "—";
+  if (BOOLEAN_COLUMNS.has(key)) return (+v) ? "yes" : "no";
   if (typeof v === "number"){
     if (!isFinite(v)) return "—";
     return (Math.abs(v) >= 1e4 || (Math.abs(v) < 0.001 && v !== 0))
@@ -741,7 +747,7 @@ function renderDetail(){
     const present = keys.filter(k => k in o);
     if (!present.length) continue;
     h += `<tr><td class="grp" colspan="2">${name}</td></tr>`;
-    for (const k of present) h += `<tr><td class="k">${k}</td><td class="v">${fmt(o[k])}</td></tr>`;
+    for (const k of present) h += `<tr><td class="k">${k}</td><td class="v">${fmt(o[k], k)}</td></tr>`;
   }
   el.innerHTML = h + "</table>";
 }

@@ -94,6 +94,20 @@ HARNESS = r"""
     const body = document.getElementById("detail").innerHTML;
     ok(body.includes("uid"), "clicking an organoid fills the feature table");
     ok(/core|rim|circularity/.test(body), "the table carries appearance features");
+    {
+      // A flag that says a row cannot be trusted is worthless if the viewer
+      // never shows it. shape_suspect was added to the matrix and, at first,
+      // to nothing else.
+      const bad = ORG.find(o => +o.shape_suspect === 1);
+      ok(bad !== undefined, "some organoids carry shape_suspect");
+      if (bad){
+        select(bad);
+        const b = document.getElementById("detail").innerHTML;
+        ok(b.includes("shape suspect") || b.includes("shape_suspect"),
+           "and selecting one shows the flag");
+      }
+      select(target);
+    }
     ok(state.selected === target, "selection state follows the click");
 
     // --- the stack is a stack, and stepping through it changes the picture ---
