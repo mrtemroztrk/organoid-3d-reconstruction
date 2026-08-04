@@ -468,37 +468,53 @@ function updateLine3d(){
   scene.add(lineObj);
 }
 
-/* ------------------------------------------------------------- orbit camera */
-const HOME = {az:-0.9, el:0.62, dist:Math.max(M.width, M.height)*1.35,
-              tx:M.width/2, ty:M.height/2, tz:ZW(M.substrate_slice)*0.5};
-const cam = Object.assign({}, HOME);
-const EPS = 0.02;
+/* ------------------------------------------------------------- orbit camera
+   Deliberately the same control model as the single-field viewer, because that
+   one is the one people already know how to fly. Three details do the work.
+
+   The polar angle runs from +Z rather than being an elevation about the
+   horizon, and it is clamped away from both poles: up is +/-Z here, so at the
+   pole the view direction is parallel to it, lookAt cannot choose a roll, and
+   the scene snaps to an arbitrary orientation.
+
+   A drag is measured from where the mouse went down, not accumulated frame by
+   frame, so a slow drag and a fast one covering the same distance end in the
+   same place and nothing drifts.
+
+   The near and far planes track the orbit distance. Leaving near at 1 with far
+   in the hundreds of thousands spends the whole depth buffer on empty space,
+   and the first thing to suffer is a large translucent surface -- which is
+   exactly what the dome is. */
+const CENTER = new THREE.Vector3(M.width/2, M.height/2, ZW(M.z_analysed || NZ)/2);
+const VOLMAX = Math.max(M.width, M.height, ZW(M.z_analysed || NZ));
+const orbit = {target: CENTER.clone(), radius: VOLMAX * 1.5,
+               theta: -Math.PI/2.6, phi: 1.15};
+let lastNearRadius = -1;
 function placeCamera(){
-  /* Elevation is clamped short of straight down. At exactly the pole the view
-     direction becomes parallel to the up vector, lookAt has no way to choose a
-     roll, and the scene snaps to an arbitrary orientation -- which is what made
-     the old navigation feel like it was fighting back. */
-  cam.el = Math.max(-Math.PI/2 + EPS, Math.min(Math.PI/2 - EPS, cam.el));
-  cam.dist = Math.max(60, Math.min(Math.max(M.width, M.height) * 8, cam.dist));
-  const ce = Math.cos(cam.el);
-  camera.position.set(cam.tx + cam.dist*ce*Math.cos(cam.az),
-                      cam.ty + cam.dist*ce*Math.sin(cam.az),
-                      cam.tz - cam.dist*Math.sin(cam.el));
-  camera.up.set(0,0,-1);
-  camera.lookAt(cam.tx, cam.ty, cam.tz);
+  if (orbit.radius !== lastNearRadius){
+    lastNearRadius = orbit.radius;
+    camera.near = Math.max(0.1, orbit.radius / 200);
+    camera.far = orbit.radius * 20;
+    camera.updateProjectionMatrix();
+  }
+  const st = Math.sin(orbit.phi), ct = Math.cos(orbit.phi);
+  camera.position.set(orbit.target.x + orbit.radius * st * Math.cos(orbit.theta),
+                      orbit.target.y + orbit.radius * st * Math.sin(orbit.theta),
+                      orbit.target.z + orbit.radius * ct);
+  camera.up.set(0, 0, -1);
+  camera.lookAt(orbit.target);
 }
-function panCamera(dxPix, dyPix){
-  /* Pan in the plane the camera is looking through, scaled so a pixel of mouse
-     travel moves the scene by a pixel of scene at the target's depth. Panning
-     in world axes instead is what makes a 3D view feel like it is sliding
-     sideways under you. */
-  const h = 2 * cam.dist * Math.tan(camera.fov * Math.PI / 360);
-  const per = h / Math.max(1, c3d.clientHeight);
-  const right = new THREE.Vector3(), up = new THREE.Vector3();
-  camera.matrixWorld.extractBasis(right, up, new THREE.Vector3());
-  cam.tx -= (right.x*dxPix - up.x*dyPix) * per;
-  cam.ty -= (right.y*dxPix - up.y*dyPix) * per;
-  cam.tz -= (right.z*dxPix - up.z*dyPix) * per;
+function resetCamera(){
+  orbit.target.copy(CENTER);
+  orbit.radius = VOLMAX * 1.5;
+  orbit.theta = -Math.PI/2.6; orbit.phi = 1.15;
+  dirty3 = true;
+}
+function topCamera(){
+  orbit.target.copy(CENTER);
+  orbit.radius = Math.max(M.width, M.height) * 1.25;
+  orbit.theta = -Math.PI/2; orbit.phi = 0.32;
+  dirty3 = true;
 }
 let dirty3 = true;
 function draw3d(){
@@ -665,18 +681,30 @@ let drag = null;
 function onMove(e){
   if (!drag) return;
   const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
-  drag.moved += Math.abs(dx) + Math.abs(dy);
+  drag.moved = Math.abs(dx) + Math.abs(dy);
   if (drag.pane === "3d"){
-    if (drag.pan) panCamera(dx, dy);
-    else { cam.az -= dx * 0.006; cam.el += dy * 0.006; }
+    if (drag.pan){
+      const dir = new THREE.Vector3().subVectors(camera.position, orbit.target).normalize();
+      const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
+      const up = new THREE.Vector3().crossVectors(right, dir).normalize();
+      const k = orbit.radius * 0.0016;
+      orbit.target.copy(drag.target)
+        .addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+    } else {
+      orbit.theta = drag.theta + dx * 0.006;
+      orbit.phi = Math.max(0.30, Math.min(Math.PI - 0.30, drag.phi + dy * 0.006));
+    }
     dirty3 = true;
-  } else { view.x += dx; view.y += dy; dirty2 = true; }
-  drag.x = e.clientX; drag.y = e.clientY;
+  } else {
+    view.x = drag.vx + dx; view.y = drag.vy + dy; dirty2 = true;
+  }
 }
 window.addEventListener("mousemove", onMove);
 window.addEventListener("mouseup", () => drag = null);
 
-c2d.addEventListener("mousedown", e => { drag = {x:e.clientX, y:e.clientY, moved:0, pane:"2d"}; });
+c2d.addEventListener("mousedown", e => {
+  drag = {x:e.clientX, y:e.clientY, moved:0, pane:"2d", vx:view.x, vy:view.y};
+});
 c2d.addEventListener("click", e => {
   if (drag && drag.moved > 4) return;
   const r = c2d.getBoundingClientRect();
@@ -692,16 +720,19 @@ c2d.addEventListener("wheel", e => {
 
 c3d.addEventListener("mousedown", e => {
   drag = {x:e.clientX, y:e.clientY, moved:0, pane:"3d",
-          pan: e.button === 2 || e.button === 1 || e.shiftKey};
+          pan: e.button === 2 || e.button === 1 || e.shiftKey,
+          theta: orbit.theta, phi: orbit.phi, target: orbit.target.clone()};
   e.preventDefault();
 });
 c3d.addEventListener("click", e => {
-  if (drag && drag.moved > 4) return;
+  if (drag && drag.moved > 3) return;
   const r = c3d.getBoundingClientRect();
   select(pick3d(e.clientX - r.left, e.clientY - r.top));
 });
 c3d.addEventListener("wheel", e => {
-  e.preventDefault(); cam.dist *= Math.pow(1.0015, e.deltaY); dirty3 = true;
+  e.preventDefault();
+  orbit.radius = Math.max(60, Math.min(60000, orbit.radius * Math.exp(e.deltaY * 0.0012)));
+  dirty3 = true;
 }, {passive:false});
 c3d.addEventListener("contextmenu", e => e.preventDefault());
 
@@ -737,8 +768,8 @@ playBtn.onclick = () => {
 window.addEventListener("keydown", e => {
   if (e.key === "ArrowRight"){ setZ(state.z + 1); e.preventDefault(); }
   else if (e.key === "ArrowLeft"){ setZ(state.z - 1); e.preventDefault(); }
-  else if (e.key === "r" || e.key === "R"){ Object.assign(cam, HOME); dirty3 = true; }
-  else if (e.key === "t" || e.key === "T"){ cam.el = Math.PI/2 - EPS; cam.az = -Math.PI/2; dirty3 = true; }
+  else if (e.key === "r" || e.key === "R") resetCamera();
+  else if (e.key === "t" || e.key === "T") topCamera();
 });
 document.getElementById("zmax").textContent = NZ;
 

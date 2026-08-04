@@ -740,10 +740,15 @@ both panes. The dome is drawn as a translucent cap with latitude rings — the
 same cross-sections the fit was made from — plus the contact circle at the
 glass.
 
-**Navigation.** Left-drag orbits, right-drag or shift-drag pans, the wheel
-zooms; `R` resets and `T` looks straight down. Elevation stops just short of
-vertical, because at the pole the view direction is parallel to the up vector
-and the scene snaps to an arbitrary roll.
+**Navigation** is the same control model as the single-field viewer, deliberately
+— left-drag orbits, right-drag or shift-drag pans, the wheel zooms, `R` resets
+and `T` gives the straight-down microscope view. A drag is measured from where
+the mouse went down rather than accumulated frame by frame, so nothing drifts;
+the polar angle stops short of both poles, where the view direction would be
+parallel to the up vector and the scene would snap to an arbitrary roll; and the
+near and far planes track the orbit distance, because leaving them fixed spends
+the whole depth buffer on empty space and the first thing to suffer is a large
+translucent surface — which is exactly what the dome is.
 
 The whole thing is a single file with no server and no network access, about
 22 MB. Every slice of every field would have been 222 MB, so what is embedded is

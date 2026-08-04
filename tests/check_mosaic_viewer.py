@@ -140,16 +140,57 @@ HARNESS = r"""
       ok(worst < 1.0, `every cap vertex lies on the fitted sphere (worst ${worst.toFixed(2)} px)`);
     }
 
-    // --- navigation: orbit and pan are different things ---
-    const t0 = [cam.tx, cam.ty, cam.tz], az0 = cam.az;
-    panCamera(60, 40); placeCamera();
-    const moved = Math.hypot(cam.tx-t0[0], cam.ty-t0[1], cam.tz-t0[2]);
-    ok(moved > 1, `panning moves the target (${moved.toFixed(0)} units)`);
-    ok(cam.az === az0, "panning does not rotate");
-    Object.assign(cam, HOME);
-    cam.el = 99; placeCamera();
-    ok(cam.el < Math.PI/2, `elevation is clamped short of the pole (${cam.el.toFixed(2)} rad)`);
-    Object.assign(cam, HOME); placeCamera();
+    // --- navigation: the same control model as the single-field viewer ---
+    resetCamera(); placeCamera();
+    const home = {th: orbit.theta, ph: orbit.phi, t: orbit.target.clone(),
+                  r: orbit.radius};
+    const r3 = c3d.getBoundingClientRect();
+    const orbitDrag = (btn, shift, dx, dy) => {
+      c3d.dispatchEvent(new MouseEvent("mousedown", {
+        clientX: r3.left + 300, clientY: r3.top + 300, button: btn,
+        shiftKey: shift, bubbles: true}));
+      window.dispatchEvent(new MouseEvent("mousemove", {
+        clientX: r3.left + 300 + dx, clientY: r3.top + 300 + dy, bubbles: true}));
+      window.dispatchEvent(new MouseEvent("mouseup", {bubbles: true}));
+    };
+
+    orbitDrag(0, false, 100, 60);
+    ok(Math.abs(orbit.theta - home.th) > 0.1 && Math.abs(orbit.phi - home.ph) > 0.1,
+       `left-drag orbits (theta ${home.th.toFixed(2)}->${orbit.theta.toFixed(2)}, ` +
+       `phi ${home.ph.toFixed(2)}->${orbit.phi.toFixed(2)})`);
+    ok(orbit.target.distanceTo(home.t) < 1e-6, "left-drag does not move the target");
+
+    resetCamera();
+    orbitDrag(2, false, 100, 60);
+    const panned = orbit.target.distanceTo(home.t);
+    ok(panned > 1, `right-drag pans the target (${panned.toFixed(0)} units)`);
+    ok(Math.abs(orbit.theta - home.th) < 1e-9, "right-drag does not rotate");
+
+    resetCamera();
+    orbitDrag(0, true, 100, 60);
+    ok(orbit.target.distanceTo(home.t) > 1, "shift-drag pans too");
+
+    // a drag started far from the pole must not be able to reach it
+    resetCamera();
+    orbitDrag(0, false, 0, 4000);
+    ok(orbit.phi <= Math.PI - 0.29 && orbit.phi >= 0.29,
+       `the polar angle stays off both poles (${orbit.phi.toFixed(2)} rad)`);
+
+    resetCamera(); placeCamera();
+    const near0 = camera.near, far0 = camera.far;
+    c3d.dispatchEvent(new WheelEvent("wheel", {deltaY: -600, bubbles: true}));
+    placeCamera();
+    ok(orbit.radius < home.r, `wheel zooms in (${home.r.toFixed(0)} -> ${orbit.radius.toFixed(0)})`);
+    ok(camera.near < near0 && camera.far < far0,
+       `the depth range follows the orbit distance (near ${near0.toFixed(0)}->` +
+       `${camera.near.toFixed(0)}, far ${far0.toFixed(0)}->${camera.far.toFixed(0)})`);
+    ok(camera.far / camera.near < 5000,
+       `near and far stay close enough to keep depth precision (ratio ` +
+       `${(camera.far/camera.near).toFixed(0)})`);
+
+    topCamera(); placeCamera();
+    ok(Math.abs(orbit.phi - 0.32) < 1e-9, "T gives the straight-down microscope view");
+    resetCamera(); placeCamera();
 
     // --- field borders can be turned off ---
     state.borders = false; dirty2 = true; draw2d();
@@ -172,16 +213,12 @@ HARNESS = r"""
     // --- dragging repaints, rather than silently moving the camera ---
     const before = camera.position.clone();
     dirty3 = false;
-    const r = c3d.getBoundingClientRect();
-    c3d.dispatchEvent(new MouseEvent("mousedown", {
-      clientX: r.left + 200, clientY: r.top + 200, button: 0, bubbles: true }));
-    window.dispatchEvent(new MouseEvent("mousemove", {
-      clientX: r.left + 400, clientY: r.top + 240, bubbles: true }));
-    window.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    orbitDrag(0, false, 200, 40);
     placeCamera();
     ok(before.distanceTo(camera.position) > 1,
        `drag moved the camera by ${before.distanceTo(camera.position).toFixed(0)} units`);
     ok(dirty3 === true, "drag requested a repaint");
+    resetCamera();
 
     // --- every canvas is the size of its box ---
     resize();
