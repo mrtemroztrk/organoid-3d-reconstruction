@@ -356,3 +356,106 @@ def _write(rows: list[dict], organoids, mosaic, registration, fit, report,
     }, indent=2), encoding="utf-8")
     _log("  mosaic.json      (geometry, dome fit, merge report, provenance)")
     mosaic.save(outdir / "tiles.json")
+
+
+# --------------------------------------------------------------------------- #
+# rebuilding the viewer without re-analysing
+# --------------------------------------------------------------------------- #
+
+def _load_result(dataset: Path, outdir: Path) -> MosaicResult:
+    """Reassemble a finished run from what it wrote, without re-measuring.
+
+    Everything needed is already on disk: the tile placement and the dome fit in
+    mosaic.json, one row per organoid in features_all.csv. The full matrix and
+    not features.csv -- that one is trimmed to the columns a person reads, and
+    two of the columns it drops are ones the viewer needs and nobody reads, the
+    r(theta) outline and the modelled axial extent. Reading the trimmed file
+    yields a viewer with no outlines to draw, which looks like a viewer showing
+    photographs rather than like a bug.
+    """
+    import ast
+    import types
+
+    from .dome import Dome
+    from .keyence import read_group_metadata
+    from .mosaic import REGISTERED
+
+    meta = json.loads((outdir / "mosaic.json").read_text())
+    acq, _ = read_group_metadata(dataset)
+    for field_name, value in (meta.get("units") or {}).items():
+        if field_name in ("px_um", "z_um") and value is not None:
+            setattr(acq, field_name, value)
+
+    mosaic = mosaicmod.build(dataset, acq)
+    if mosaic is None:
+        raise ValueError(f"{dataset} does not describe a tiled acquisition")
+    placed = {t["name"]: t for t in meta["mosaic"]["tiles"]}
+    for tile in mosaic:
+        record = placed.get(tile.name)
+        if record is None:
+            raise ValueError(f"{tile.name} is not in {outdir / 'mosaic.json'}")
+        tile.x0, tile.y0 = record["x0_px"], record["y0_px"]
+        tile.offset_source = record.get("offset_source", REGISTERED)
+
+    matrix = outdir / "features_all.csv"
+    if not matrix.exists():
+        raise FileNotFoundError(
+            f"{matrix} is missing. It is written by a full run and carries the "
+            f"columns the viewer draws with; features.csv is a summary and "
+            f"cannot be used in its place.")
+
+    rows: list[dict] = []
+    with matrix.open(encoding="utf-8") as fh:
+        for record in csv.DictReader(fh):
+            row: dict = {}
+            for key, raw in record.items():
+                if raw is None or raw == "":
+                    continue
+                if key == "radial_profile_px":
+                    row[key] = ast.literal_eval(raw)
+                    continue
+                try:
+                    row[key] = float(raw)
+                except ValueError:
+                    row[key] = {"True": True, "False": False}.get(raw, raw)
+            rows.append(row)
+
+    dome_record = (meta.get("dome") or {}).get("dome")
+    dome = (Dome(**{k: v for k, v in dome_record.items()
+                    if k in Dome.__dataclass_fields__})
+            if dome_record else None)
+    merge = meta.get("merge") or {}
+    return MosaicResult(
+        mosaic=mosaic,
+        registration=types.SimpleNamespace(
+            residual_px=(meta.get("registration") or {}).get("residual_px", 0.0)),
+        dome_fit=types.SimpleNamespace(
+            dome=dome,
+            substrate=types.SimpleNamespace(
+                slice_index=meta["dome"]["substrate"]["slice_index"])),
+        organoids=[], report=types.SimpleNamespace(
+            n_sightings=merge.get("n_sightings", len(rows)),
+            n_merged=merge.get("n_merged", 0)),
+        acq=acq, outdir=outdir, rows=rows)
+
+
+def rebuild_viewer(dataset: str | Path, outdir: str | Path,
+                   progress=None) -> Path:
+    """Regenerate viewer.html from a finished run, in about a minute.
+
+    This exists because the alternative was rebuilding it by hand. A generated
+    viewer is a frozen copy of the template, so every change to the template
+    leaves the file on disk behind, and re-running the whole analysis to pick up
+    a change to a button is absurd. Without a supported way to do it, the job
+    fell to a script kept outside the repository, which promptly drifted and
+    started reading the wrong file.
+    """
+    from . import viewer_mosaic
+
+    dataset, outdir = Path(dataset), Path(outdir)
+    result = _load_result(dataset, outdir)
+    _log(f"  {len(result.rows)} organoids, {len(result.mosaic)} fields, "
+         f"offsets {result.mosaic.offset_source}")
+    html = viewer_mosaic.build(result, outdir / "viewer.html", progress=progress)
+    _log(f"  viewer.html      ({html.stat().st_size / 1e6:.1f} MB)")
+    return html

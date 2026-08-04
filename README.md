@@ -535,6 +535,24 @@ per-field results are cached, so re-running to change only the feature
 extraction does not re-segment anything. Peak memory is one tile at a time
 (~90 MB); the assembled volume would be 750 million voxels and is never held.
 
+### Rebuilding just the viewer
+
+```bash
+./.venv/bin/python run_mosaic.py BK52_WT_9805_B --viewer-only
+```
+
+A generated viewer is a frozen copy of the template, so any change to the viewer
+leaves the file on disk behind, and re-running the whole analysis to pick up a
+change to a button is absurd. This reloads a finished run from `mosaic.json` and
+`features_all.csv` and rebuilds the page in about a minute. The header carries
+the version and build time, so a stale file says so.
+
+It reads `features_all.csv` rather than `features.csv` deliberately: the trimmed
+matrix drops two columns the viewer needs and nobody reads — the r(θ) outline
+and the modelled axial extent — and a viewer built without them draws no
+outlines at all, which looks like a viewer showing photographs rather than like
+a fault.
+
 ### Control panel
 
 ```bash

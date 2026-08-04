@@ -57,6 +57,10 @@ def main(argv=None) -> int:
     gc.add_argument("--z-step-um", type=float, default=None, help="µm per slice")
 
     g3 = p.add_argument_group("output")
+    g3.add_argument("--viewer-only", action="store_true",
+                    help="rebuild viewer.html from a finished run's outputs and "
+                         "stop. Takes about a minute instead of re-analysing, "
+                         "and is what to use after a change to the viewer itself")
     g3.add_argument("--no-cache", action="store_true",
                     help="re-measure every tile instead of reusing its result")
 
@@ -79,6 +83,15 @@ def main(argv=None) -> int:
         overrides["px_um"] = a.px_size
     if a.z_step_um is not None:
         overrides["z_um"] = a.z_step_um
+
+    if a.viewer_only:
+        from jx3d.mosaic_pipeline import rebuild_viewer
+        import sys as _sys
+        html = rebuild_viewer(
+            dataset, outdir,
+            progress=lambda n, t: _sys.stdout.write(f"\r  viewer {n}/{t}   "))
+        print(f"\nViewer:  {html.resolve()}")
+        return 0
 
     result = run(dataset, outdir, params=params, gpu=not a.no_gpu,
                  use_cache=not a.no_cache, min_sharpness=a.min_sharpness,
