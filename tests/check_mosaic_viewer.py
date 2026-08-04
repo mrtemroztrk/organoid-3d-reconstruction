@@ -267,11 +267,38 @@ HARNESS = r"""
     orbitDrag(0, true, 100, 60);
     ok(orbit.target.distanceTo(home.t) > 1, "shift-drag pans too");
 
-    // a drag started far from the pole must not be able to reach it
+    // middle button orbits, which is the Blender habit most people arrive with
+    resetCamera();
+    orbitDrag(1, false, 100, 60);
+    ok(Math.abs(orbit.theta - home.th) > 0.1,
+       `middle-drag orbits (theta ${home.th.toFixed(2)} -> ${orbit.theta.toFixed(2)})`);
+    ok(orbit.target.distanceTo(home.t) < 1e-6, "middle-drag does not move the target");
+
+    // The view must reach edge-on and straight-down; only the pole itself is
+    // forbidden, and only because lookAt cannot pick a roll there.
+    resetCamera();
+    orbitDrag(0, false, 0, -4000);
+    ok(orbit.phi < 0.01 && orbit.phi >= 0,
+       `dragging up reaches straight down the optical axis (phi ${orbit.phi.toFixed(4)} rad)`);
+    placeCamera();
+    ok(Math.abs(camera.up.dot(new THREE.Vector3().subVectors(
+         camera.position, orbit.target).normalize())) < 0.05,
+       "and the up vector is still square to the view there, so the roll is defined");
     resetCamera();
     orbitDrag(0, false, 0, 4000);
-    ok(orbit.phi <= Math.PI - 0.29 && orbit.phi >= 0.29,
-       `the polar angle stays off both poles (${orbit.phi.toFixed(2)} rad)`);
+    ok(orbit.phi > Math.PI - 0.01 && orbit.phi <= Math.PI,
+       `and dragging down reaches the other pole (phi ${orbit.phi.toFixed(3)} rad)`);
+    {
+      // edge-on: the camera must sit at the target's depth, looking along the glass
+      frontCamera(); placeCamera();
+      ok(Math.abs(camera.position.z - orbit.target.z) < 1e-6,
+         "F gives a true edge-on view, level with the specimen");
+      const box = ZW(M.z_analysed || NZ);
+      const top = new THREE.Vector3(M.width/2, M.height/2, 0).project(camera);
+      const bot = new THREE.Vector3(M.width/2, M.height/2, box).project(camera);
+      ok(Math.abs(top.y - bot.y) > 0.2,
+         "and from there the depth of the stack is spread across the screen");
+    }
 
     resetCamera(); placeCamera();
     const near0 = camera.near, far0 = camera.far;
@@ -285,8 +312,30 @@ HARNESS = r"""
        `near and far stay close enough to keep depth precision (ratio ` +
        `${(camera.far/camera.near).toFixed(0)})`);
 
-    topCamera(); placeCamera();
-    ok(Math.abs(orbit.phi - 0.32) < 1e-9, "T gives the straight-down microscope view");
+    topCamera(); placeCamera(); camera.updateMatrixWorld();
+    // Either pole is "straight down the axis"; which one is a matter of the
+    // sign convention, and depth increases downward here, so it is pi.
+    ok(Math.min(orbit.phi, Math.PI - orbit.phi) < 0.1,
+       `T looks essentially straight down the optical axis (phi ${orbit.phi.toFixed(3)} rad)`);
+    ok(camera.position.z < orbit.target.z,
+       "and from above the specimen, not from under the glass looking up");
+    {
+      // Square to the screen: a step along the mosaic's x has to move the image
+      // horizontally and a step along its y vertically. Measured with small
+      // steps about the target, so this is about orientation and not about
+      // perspective foreshortening at the far corner.
+      const c = orbit.target;
+      const p0 = new THREE.Vector3(c.x, c.y, c.z).project(camera);
+      const px = new THREE.Vector3(c.x + 200, c.y, c.z).project(camera);
+      const py = new THREE.Vector3(c.x, c.y + 200, c.z).project(camera);
+      const dx = [px.x - p0.x, px.y - p0.y], dy = [py.x - p0.x, py.y - p0.y];
+      ok(Math.abs(dx[1]) < 0.05 * Math.abs(dx[0]),
+         `mosaic +x runs horizontally on screen (tilt ${(dx[1]/dx[0]).toFixed(4)})`);
+      ok(Math.abs(dy[0]) < 0.05 * Math.abs(dy[1]),
+         `mosaic +y runs vertically (tilt ${(dy[0]/dy[1]).toFixed(4)})`);
+      ok(dx[0] > 0 && dy[1] < 0,
+         "with x to the right and y downward, the same way round as the photograph");
+    }
     resetCamera(); placeCamera();
 
     // --- field borders can be turned off ---

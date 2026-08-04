@@ -91,7 +91,7 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 13px
   <div class="pane" id="p3d">
     <canvas id="c3d"></canvas>
     <div class="pane-label">3D reconstruction</div>
-    <div class="pane-hint">Left-drag: orbit · Right-drag or Shift-drag: pan · Wheel: zoom · Click: select · <b>R</b>: reset · <b>T</b>: top</div>
+    <div class="pane-hint">Middle- or left-drag: orbit · Right-drag: pan · Wheel: zoom · Click: select · <b>R</b>: reset · <b>T</b>: top · <b>F</b>: front</div>
   </div>
   <aside>
     <div class="card">
@@ -548,6 +548,13 @@ function updateLine3d(){
    exactly what the dome is. */
 const CENTER = new THREE.Vector3(M.width/2, M.height/2, ZW(M.z_analysed || NZ)/2);
 const VOLMAX = Math.max(M.width, M.height, ZW(M.z_analysed || NZ));
+const POLE_EPS = 0.001;
+/* Only the pole itself is forbidden, and only because the view direction there
+   is parallel to the up vector and lookAt has no roll to choose. The previous
+   limit of 0.30 rad walled off seventeen degrees at each end, which is exactly
+   where the useful views live: straight down the optical axis, the way the
+   microscope sees it, and edge-on along the glass, the way the depth
+   distribution reads. */
 const orbit = {target: CENTER.clone(), radius: VOLMAX * 1.5,
                theta: -Math.PI/2.6, phi: 1.15};
 let lastNearRadius = -1;
@@ -559,10 +566,23 @@ function placeCamera(){
     camera.updateProjectionMatrix();
   }
   const st = Math.sin(orbit.phi), ct = Math.cos(orbit.phi);
-  camera.position.set(orbit.target.x + orbit.radius * st * Math.cos(orbit.theta),
-                      orbit.target.y + orbit.radius * st * Math.sin(orbit.theta),
+  const cp = Math.cos(orbit.theta), sp = Math.sin(orbit.theta);
+  camera.position.set(orbit.target.x + orbit.radius * st * cp,
+                      orbit.target.y + orbit.radius * st * sp,
                       orbit.target.z + orbit.radius * ct);
-  camera.up.set(0, 0, -1);
+  /* Up follows the orbit instead of being pinned to the depth axis. Pinning it
+     is what made looking straight down impossible: there the view direction is
+     parallel to a fixed up vector, lookAt has no roll to choose, and the old
+     code avoided it by walling off seventeen degrees at each end -- which is
+     precisely where the two most useful views live, straight down the optical
+     axis and edge-on along the glass.
+
+     This is the tangent to the orbit in the direction of decreasing polar
+     angle, so it is never parallel to the view and is defined everywhere. At
+     the equator it reduces to the old value, so a side view is unchanged; at
+     the pole it lies in the plane of the glass, which is what makes the mosaic
+     sit square to the screen the way the photograph does. */
+  camera.up.set(ct * cp, ct * sp, -st);
   camera.lookAt(orbit.target);
 }
 function resetCamera(){
@@ -574,7 +594,20 @@ function resetCamera(){
 function topCamera(){
   orbit.target.copy(CENTER);
   orbit.radius = Math.max(M.width, M.height) * 1.25;
-  orbit.theta = -Math.PI/2; orbit.phi = 0.32;
+  /* From above, looking down the way the objective does. The polar angle is
+     measured from the depth axis and depth increases downward, so the view from
+     above is at phi = pi, not 0 -- the other end puts the camera under the glass
+     looking up through the dish, which is the specimen mirrored. Theta is chosen
+     so that the up vector comes out along -Y, and image-up is screen-up. */
+  orbit.theta = Math.PI/2; orbit.phi = Math.PI - POLE_EPS * 2;
+  dirty3 = true;
+}
+function frontCamera(){
+  /* Edge-on, along the glass. This is the view that shows how the organoids are
+     distributed through the depth of the droplet rather than across it. */
+  orbit.target.copy(CENTER);
+  orbit.radius = Math.max(M.width, ZW(M.z_analysed || NZ)) * 1.6;
+  orbit.theta = -Math.PI/2; orbit.phi = Math.PI/2;
   dirty3 = true;
 }
 let dirty3 = true;
@@ -770,7 +803,8 @@ function onMove(e){
         .addScaledVector(up, dy * perPixel);
     } else {
       orbit.theta = drag.theta + dx * 0.006;
-      orbit.phi = Math.max(0.30, Math.min(Math.PI - 0.30, drag.phi + dy * 0.006));
+      orbit.phi = Math.max(POLE_EPS, Math.min(Math.PI - POLE_EPS,
+                                              drag.phi + dy * 0.006));
     }
     dirty3 = true;
   } else {
@@ -797,8 +831,14 @@ c2d.addEventListener("wheel", e => {
 }, {passive:false});
 
 c3d.addEventListener("mousedown", e => {
+  /* Blender's mapping, because that is the one people already have in their
+     hands: the wheel button drags the view around, the right button slides it,
+     the wheel zooms. Left-drag orbits as well, so a laptop trackpad without a
+     middle button is not locked out of rotating; shift-drag pans for the same
+     reason. */
+  const orbitBtn = e.button === 1 || e.button === 0;
   drag = {x:e.clientX, y:e.clientY, moved:0, pane:"3d",
-          pan: e.button === 2 || e.button === 1 || e.shiftKey,
+          pan: e.button === 2 || (e.shiftKey && orbitBtn),
           theta: orbit.theta, phi: orbit.phi, target: orbit.target.clone()};
   e.preventDefault();
 });
@@ -849,6 +889,7 @@ window.addEventListener("keydown", e => {
   else if (e.key === "ArrowLeft"){ setZ(state.z - 1); e.preventDefault(); }
   else if (e.key === "r" || e.key === "R") resetCamera();
   else if (e.key === "t" || e.key === "T") topCamera();
+  else if (e.key === "f" || e.key === "F") frontCamera();
 });
 document.getElementById("zmax").textContent = NZ;
 /* The slider spans the whole stack, but only part of it was analysed: below the

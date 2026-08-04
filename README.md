@@ -740,15 +740,25 @@ both panes. The dome is drawn as a translucent cap with latitude rings — the
 same cross-sections the fit was made from — plus the contact circle at the
 glass.
 
-**Navigation** is the same control model as the single-field viewer, deliberately
-— left-drag orbits, right-drag or shift-drag pans, the wheel zooms, `R` resets
-and `T` gives the straight-down microscope view. A drag is measured from where
-the mouse went down rather than accumulated frame by frame, so nothing drifts;
-the polar angle stops short of both poles, where the view direction would be
-parallel to the up vector and the scene would snap to an arbitrary roll; and the
-near and far planes track the orbit distance, because leaving them fixed spends
-the whole depth buffer on empty space and the first thing to suffer is a large
-translucent surface — which is exactly what the dome is.
+**Navigation** follows Blender, because that is the mapping most people already
+have in their hands: **middle-drag orbits, right-drag pans, the wheel zooms**.
+Left-drag also orbits and shift-drag also pans, so a trackpad without a middle
+button is not locked out. `R` resets, `T` is the straight-down microscope view
+and `F` is edge-on along the glass.
+
+The view reaches both of those. An earlier version pinned the up vector to the
+depth axis, which made the poles degenerate — at the pole the view direction is
+parallel to a fixed up vector and there is no roll to choose — and walled off
+seventeen degrees at each end to avoid them. That is exactly where the two most
+useful views live. The up vector now follows the orbit, so it is never parallel
+to the view, the whole range is reachable, and from directly above the mosaic
+sits square to the screen the same way round as the photograph.
+
+Two other details: a drag is measured from where the mouse went down rather than
+accumulated frame by frame, so nothing drifts; and the near and far planes track
+the orbit distance, because leaving them fixed spends the whole depth buffer on
+empty space and the first thing to suffer is a large translucent surface — which
+is exactly what the dome is.
 
 The whole thing is a single file with no server and no network access, about
 22 MB. Every slice of every field would have been 222 MB, so what is embedded is
