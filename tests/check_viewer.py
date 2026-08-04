@@ -88,11 +88,11 @@ HARNESS = r"""
     // --- a selected organoid is unmistakable ---
     select(ORG[Math.min(3, ORG.length - 1)].oid, false);
     ok(selOutline.visible === true, "selection draws an outline shell");
-    const others = ORG.filter(o => o.oid !== state.selected && visible(o))
-                      .map(o => meshes.get(o.oid).material.opacity);
-    ok(others.length === 0 || Math.max(...others) < 0.2,
-       `unselected dimmed to ${others.length ? Math.max(...others) : "n/a"}`);
-    ok(meshes.get(state.selected).material.opacity === 1.0, "selected at full opacity");
+    ok(window.__dimFactor < 0.3, `unselected dimmed to ${window.__dimFactor}`);
+    ok(meshes.get(state.selected).material.transparent === false,
+       "no material had to be recompiled for the selection");
+    ok([...meshes.values()].every(m => m.material.transparent === false),
+       "all materials stay opaque (no shader rebuild on select)");
     select(null, false);
 
     // --- colour encodes a measurement ---

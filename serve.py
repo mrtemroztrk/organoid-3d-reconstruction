@@ -239,12 +239,17 @@ class Handler(BaseHTTPRequestHandler):
                         meta = json.loads(j.read_text())
                     except Exception:
                         continue
+                    from jx3d.viewer import template_version
                     res.append({
                         "name": d.name,
                         "organoids": meta.get("n_organoids"),
                         "calibrated": meta.get("units", {}).get("calibrated"),
                         "dome": bool(meta.get("dome")),
                         "viewer": (d / "viewer.html").exists(),
+                        # A viewer is a frozen copy of the template; if the
+                        # template has moved on, this page still carries
+                        # whatever was wrong with it when it was written.
+                        "stale": meta.get("viewer_version") != template_version(),
                     })
             self._json(res)
         elif p.startswith("/out/"):

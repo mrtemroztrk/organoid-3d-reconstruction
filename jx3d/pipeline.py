@@ -23,6 +23,11 @@ from .reconstruct import (Organoid, attach_dome, export_mesh, filter_organoids,
 from .stack import ZStack, load_stack
 
 
+def _viewer_version() -> str:
+    from .viewer import template_version
+    return template_version()
+
+
 def _log(msg: str = "") -> None:
     print(msg, flush=True)
 
@@ -354,6 +359,7 @@ def _write_tables(organoids: list[Organoid], stack: ZStack, params: Params,
         "acquisition": acq.to_dict(),
         "params": params.to_dict(),
         "substrate_slice": int(substrate),
+        "viewer_version": _viewer_version(),
         "dome": dome.to_dict() if dome is not None else None,
         "n_organoids": len(organoids),
         "organoids": rows,

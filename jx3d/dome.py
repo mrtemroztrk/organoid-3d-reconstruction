@@ -97,13 +97,19 @@ def ridge_points(volume: np.ndarray, z_range: range, sigma: float = 28.0,
     """Points on the gel/medium interface, as (x_px, y_px, z_slice).
 
     Where the curved interface crosses the focal plane it leaves a broad band of
-    high texture, not a thin line: near the edge you are looking through a long
-    slanted path of gel. The gel *ends* at the far side of that band, so the
-    interface is the band's **outer edge**, not its brightest point.
+    high texture, not a thin line: near the edge you look through a long slanted
+    path of gel. The gel *ends* at the far side of that band, so the interface is
+    the band's **outer edge**, not its brightest point. Tracking the bright point
+    instead puts the surface inside the droplet and leaves about a quarter of the
+    organoids apparently outside the gel they grew in.
 
-    That distinction is not cosmetic. Tracking the brightest point puts the
-    surface inside the droplet and leaves 23% of the organoids apparently
-    outside the gel they grew in; tracking the outer edge encloses 99% of them.
+    "Outer" has no fixed direction, though. The droplet edge can enter the field
+    from any side, and scanning every row left-to-right -- as this first did --
+    silently assumes it lies to the right. On a field where it does not, the scan
+    returns debris instead and the fit is rejected downstream. So each line is
+    scanned from both ends, in rows and in columns, and every first-crossing is
+    offered to the consensus fit, which keeps whichever set actually lies on a
+    sphere.
 
     `sigma` is deliberately large. At organoid scale the texture map is full of
     organoids; only at a much coarser scale does the interface band dominate.
@@ -116,20 +122,31 @@ def ridge_points(volume: np.ndarray, z_range: range, sigma: float = 28.0,
         t = np.log1p(cv2.GaussianBlur(tenengrad(volume[z].astype(np.float32)),
                                       (0, 0), sigma))
         thr = float(np.median(t)) + threshold_k * float(t.std())
-        for y in range(row_step, h - row_step, row_step):
-            row = t[y]
-            if edge == "peak":
-                x = int(np.argmax(row[x0:])) + x0
-            else:
-                above = np.flatnonzero(row[x0:] > thr)
-                if above.size == 0:
+        hot = t > thr
+
+        if edge == "peak":
+            for y in range(row_step, h - row_step, row_step):
+                x = int(np.argmax(t[y, x0:])) + x0
+                if x0 + 4 < x < w - 6:
+                    pts.append((float(x), float(y), float(z)))
+        else:
+            # rows, scanned inward from each side
+            for y in range(row_step, h - row_step, row_step):
+                idx = np.flatnonzero(hot[y, x0:])
+                if idx.size == 0:
                     continue
-                x = int(above[-1]) + x0
-            # a maximum pinned to the frame edge means the interface has left
-            # the field of view; that row carries no information
-            if x <= x0 + 4 or x >= w - 6:
-                continue
-            pts.append((float(x), float(y), float(z)))
+                for x in (int(idx[-1]) + x0, int(idx[0]) + x0):
+                    if x0 + 4 < x < w - 6:
+                        pts.append((float(x), float(y), float(z)))
+            # columns, likewise -- catches an edge running across the frame
+            for x in range(row_step, w - row_step, row_step):
+                idx = np.flatnonzero(hot[:, x])
+                if idx.size == 0:
+                    continue
+                for y in (int(idx[-1]), int(idx[0])):
+                    if 4 < y < h - 6:
+                        pts.append((float(x), float(y), float(z)))
+
         if progress:
             progress(n + 1, len(z_range))
 

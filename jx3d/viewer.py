@@ -21,6 +21,21 @@ _TEMPLATE = Path(__file__).with_name("viewer_template.html")
 _THREE = Path(__file__).parent / "assets" / "three.min.js"
 
 
+def template_version() -> str:
+    """Short hash of the template that builds the viewer.
+
+    A generated viewer is a frozen copy of the template at the moment it was
+    written. Fixing a bug in the template does nothing for pages that already
+    exist, and there is no way to tell a stale one apart by looking at it --
+    which is exactly how three datasets ended up with three different viewers,
+    two of them still carrying faults that had been fixed hours earlier. The
+    stamp lets the control panel say which ones need rebuilding.
+    """
+    import hashlib
+
+    return hashlib.sha256(_TEMPLATE.read_bytes()).hexdigest()[:12]
+
+
 def _encode_slices(volume: np.ndarray, quality: int = 72,
                    max_width: int | None = None, progress=None) -> list[str]:
     uris: list[str] = []
@@ -61,6 +76,7 @@ def build_viewer(stack, organoids: list[Organoid], params: Params,
         "focus_profile": [round(float(v), 2) for v in focus_profile],
         "depth_of_field_slices": round(acq.depth_of_field_slices, 2),
         "dome": dome.to_dict() if dome is not None else None,
+        "viewer_version": template_version(),
     }
     payload = {"meta": meta, "organoids": [o.to_dict() for o in organoids]}
 

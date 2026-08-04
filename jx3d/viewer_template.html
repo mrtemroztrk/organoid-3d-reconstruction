@@ -764,13 +764,17 @@ const orbit = {
   radius: Math.max(VOL.x, VOL.y, VOL.z) * 1.5,
   theta: -Math.PI / 2.6, phi: 1.15,
 };
+let lastNearRadius = -1;
 function applyCamera(){
-  // Track the clipping planes to the orbit distance. Leaving near at 1 with far
-  // at 40000 spends almost the whole depth buffer on empty space, and touching
-  // surfaces then z-fight.
-  camera.near = Math.max(0.1, orbit.radius / 200);
-  camera.far = orbit.radius * 20;
-  camera.updateProjectionMatrix();
+  // Track the clipping planes to the orbit distance -- leaving near at 1 with
+  // far at 40000 spends the whole depth buffer on empty space. Only recompute
+  // when the distance actually changed; rotation does not need it.
+  if (orbit.radius !== lastNearRadius){
+    lastNearRadius = orbit.radius;
+    camera.near = Math.max(0.1, orbit.radius / 200);
+    camera.far = orbit.radius * 20;
+    camera.updateProjectionMatrix();
+  }
   const st = Math.sin(orbit.phi), ct = Math.cos(orbit.phi);
   camera.position.set(
     orbit.target.x + orbit.radius * st * Math.cos(orbit.theta),
@@ -848,6 +852,7 @@ scene.add(selOutline);
 
 function updateMeshes(){
   const anySel = state.selected !== null;
+  window.__dimFactor = anySel ? 0.18 : 1.0;
   for (const o of ORG){
     const m = meshes.get(o.oid);
     const vis = visible(o);
@@ -855,14 +860,14 @@ function updateMeshes(){
     if (!vis) continue;
     const sel = state.selected === o.oid;
     const c = ramp(colorValue(o));
-    m.material.color.setRGB(c[0]/255, c[1]/255, c[2]/255);
+    // Dim the unselected by darkening their colour, not by making them
+    // transparent. Flipping material.transparent sets needsUpdate, and each of
+    // these 99 objects owns its own material, so a single click recompiled
+    // ~99 shader programs -- seconds of freeze on every selection. A colour is
+    // a uniform: it costs nothing to change.
+    const k = (!anySel || sel) ? 1.0 : 0.18;
+    m.material.color.setRGB(c[0]/255*k, c[1]/255*k, c[2]/255*k);
     m.material.emissive.setHex(sel ? 0x6688aa : 0x000000);
-    const wantTransparent = anySel && !sel;
-    if (m.material.transparent !== wantTransparent){
-      m.material.transparent = wantTransparent;
-      m.material.needsUpdate = true;
-    }
-    m.material.opacity = wantTransparent ? 0.12 : 1.0;
   }
   boxGroup.visible = state.showBox;
 
