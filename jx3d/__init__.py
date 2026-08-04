@@ -15,7 +15,7 @@ A specimen larger than one field is captured as a grid of overlapping stacks.
 measured as a single object rather than as fifteen unrelated views of it.
 """
 
-__version__ = "2.6.2"
+__version__ = "2.7.0"
 
 from .config import Acquisition, Params
 from .mosaic import Mosaic, Tile

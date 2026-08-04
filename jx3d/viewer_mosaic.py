@@ -84,19 +84,34 @@ costs a third of a megabyte to repeat."""
 
 
 def _trim(row: dict) -> dict:
-    out = {k: v for k, v in row.items() if k not in _KEEP_REDUNDANT}
+    """One organoid, small enough to ship 844 of them in a single file.
+
+    Nothing is dropped that the feature table shows -- the whole point of the
+    viewer is that every measured number is one click away. What goes is
+    precision nobody reads: a texture descriptor quoted to fifteen significant
+    figures is fourteen more than the measurement supports, and repeated across
+    a hundred and thirty-nine columns and eight hundred rows it costs megabytes.
+    """
+    out = {}
+    for k, v in row.items():
+        if k in _KEEP_REDUNDANT:
+            continue
+        if isinstance(v, float):
+            out[k] = round(v, 4)
+        else:
+            out[k] = v
     profile = out.get("radial_profile_px")
     if profile:
         # The outline is what makes superposition on the photograph honest --
-        # a circle would draw a shape that was never measured -- but three
-        # decimals of a pixel is noise, and rounding halves the payload.
+        # a circle would draw a shape that was never measured -- but a tenth of
+        # a pixel is already below what the segmentation resolves.
         out["radial_profile_px"] = [round(float(v), 1) for v in profile]
     return out
 
 
-def build(result, path: str | Path, quality: int = 78,
-          slice_width: int = 850, slice_quality: int = 66,
-          progress=None) -> Path:
+def build(result, path: str | Path, quality: int = 70,
+          slice_width: int = 760, slice_quality: int = 60,
+          tile_width: int = 720, progress=None) -> Path:
     """Write the viewer for a finished mosaic run."""
     from . import __version__
     from .blend import MosaicSlices, estimate_flat_field
@@ -111,7 +126,7 @@ def build(result, path: str | Path, quality: int = 78,
     fused = MosaicSlices(mosaic, flat, blend=True)
     z_stop = int(max(4, substrate - 3))
 
-    steps = len(mosaic) + 1 + z_stop
+    steps = len(mosaic) + 1 + tiles.depth
     done = 0
 
     tile_payload = []
@@ -126,19 +141,25 @@ def build(result, path: str | Path, quality: int = 78,
             "row": tile.row, "col": tile.col,
             "x0": round(tile.x0, 2), "y0": round(tile.y0, 2),
             "w": tile.width, "h": tile.height,
-            "edf": _jpeg_uri(projection, quality),
+            "edf": _jpeg_uri(projection, quality, max_width=tile_width),
         })
         done += 1
         if progress:
             progress(done, steps)
 
-    mosaic_edf = _jpeg_uri(canvas, quality, max_width=2200)
+    mosaic_edf = _jpeg_uri(canvas, quality, max_width=1800)
     done += 1
     if progress:
         progress(done, steps)
 
+    # The whole stack, not just the part that was analysed. Measurement stops
+    # short of the glass because the dish surface is sharper than anything
+    # biological and would capture every focus peak, but that is a reason to
+    # exclude those slices from the *analysis*, not from the picture. They were
+    # photographed, they show the specimen settling onto the glass, and a viewer
+    # that silently ends at slice 91 of 119 is hiding a quarter of the data.
     stack = []
-    for z in range(z_stop):
+    for z in range(tiles.depth):
         stack.append(_jpeg_uri(fused.slice(z), slice_quality,
                                max_width=slice_width))
         done += 1
@@ -164,6 +185,7 @@ def build(result, path: str | Path, quality: int = 78,
             "n_merged": result.report.n_merged,
             "dome": dome.to_dict() if dome is not None else None,
             "z_analysed": z_stop,
+            "z_total": tiles.depth,
             "n_theta": len((result.rows[0].get("radial_profile_px") or [])) or None,
         },
         "tiles": tile_payload,

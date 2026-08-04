@@ -84,11 +84,24 @@ def analyse_tiles(mosaic: mosaicmod.Mosaic, substrate: float, params: Params,
         _log(f"\n  ---- tile {n}/{len(mosaic)}: {tile.name} "
              f"(row {tile.row}, col {tile.col}) ----")
         if use_cache and result_path.exists():
+            # What a cached tile result depends on. The substrate is not enough:
+            # switching from the projection-only pass to the per-slice one
+            # changes what an outline means, and a cache keyed on depth alone
+            # would hand back the old answer under the new setting without
+            # saying so.
             payload = json.loads(result_path.read_text())
-            if payload.get("substrate_slice") == int(round(substrate)):
+            cached = payload.get("params") or {}
+            matches = (payload.get("substrate_slice") == int(round(substrate))
+                       and cached.get("mode") == params.mode
+                       and cached.get("detector") == params.detector
+                       and cached.get("min_diameter_px") == params.min_diameter_px
+                       and cached.get("max_diameter_px") == params.max_diameter_px)
+            if matches:
                 per_tile[tile.name] = payload["organoids"]
                 _log(f"  {len(per_tile[tile.name])} organoids (cached)")
                 continue
+            _log(f"  cached result was measured with different settings "
+                 f"(mode {cached.get('mode')} vs {params.mode}); re-measuring")
         run_tile(tile.folder, tile_out, params=params, gpu=gpu,
                  use_cache=use_cache, build_html=False,
                  min_sharpness=min_sharpness, substrate_override=substrate)
@@ -162,7 +175,7 @@ def run(dataset: str | Path, outdir: str | Path, params: Params | None = None,
         calibration: dict | None = None,
         build_viewer: bool = True) -> MosaicResult:
     """The whole mosaic analysis, from tile folders to a feature matrix."""
-    params = params or Params(mode="edf", fit_dome=False)
+    params = params or Params(mode="both", fit_dome=False)
     dataset, outdir = Path(dataset), Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     started = time.time()

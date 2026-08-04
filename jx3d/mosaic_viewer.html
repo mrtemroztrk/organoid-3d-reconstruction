@@ -58,7 +58,15 @@ table.feat td.v{text-align:right;font-variant-numeric:tabular-nums}
 .ctl input[type=range]{flex:1;accent-color:var(--accent)}
 footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 13px;
   display:flex;align-items:center;gap:11px}
-#zslider{flex:1;accent-color:var(--accent)}
+#ztrack{flex:1;position:relative}
+#zslider{width:100%;accent-color:var(--accent);display:block}
+#zmarks{position:relative;height:11px;margin-top:-2px}
+#zmarks span{position:absolute;transform:translateX(-50%);font-size:9px;
+  color:var(--dim);white-space:nowrap}
+#zmarks span::before{content:"";position:absolute;left:50%;top:-4px;width:1px;
+  height:4px;background:var(--dim)}
+#zmarks span.glass{color:var(--warn)}
+#zmarks span.glass::before{background:var(--warn)}
 .flag{display:inline-block;background:#3a2a10;color:var(--warn);border-radius:4px;
   padding:1px 5px;font-size:10px;margin:1px 2px 0 0}
 </style>
@@ -70,6 +78,7 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 13px
   <button id="b-plane" class="on">Photo in 3D</button>
   <button id="b-clip" class="on">Clip at slice</button>
   <button id="b-dome" class="on">Dome</button>
+  <button id="b-build">Build up</button>
   <button id="b-line">Border line</button>
   <div class="meta" id="hcount"></div>
 </header>
@@ -113,7 +122,7 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 13px
       <h2>Shown</h2>
       <div class="kpis">
         <div class="kpi"><div class="l">Organoids</div><div class="v" id="k-n">0</div></div>
-        <div class="kpi"><div class="l">In focus here</div><div class="v" id="k-f">0</div></div>
+        <div class="kpi"><div class="l" id="k-f-l">In focus here</div><div class="v" id="k-f">0</div></div>
         <div class="kpi"><div class="l">Median diameter</div><div class="v" id="k-d">—</div></div>
         <div class="kpi"><div class="l">Median border gap</div><div class="v" id="k-b">—</div></div>
       </div>
@@ -130,11 +139,12 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 13px
   </aside>
 </main>
 <footer>
-  <button id="b-prev">◀</button>
-  <span class="meta">Slice <b id="znum">1</b>/<span id="zmax">1</span><span id="zum"></span></span>
-  <input type="range" id="zslider" min="0" max="0" value="0">
-  <button id="b-next">▶</button>
-  <button id="b-play">▶ Play</button>
+  <button id="b-prev" title="Previous slice (left arrow)">◀</button>
+  <span class="meta" style="min-width:250px">Slice <b id="znum">1</b>/<span id="zmax">1</span><span id="zum"></span></span>
+  <div id="ztrack"><input type="range" id="zslider" min="0" max="0" value="0">
+    <div id="zmarks"></div></div>
+  <button id="b-next" title="Next slice (right arrow)">▶</button>
+  <button id="b-play" title="Sweep down through the stack">▶ Play</button>
 </footer>
 </div>
 <script>/*__THREE__*/</script>
@@ -152,8 +162,16 @@ const state = {
   outline: 0.90, fill: 0.0, window: 4, allDepths: false,
   borders: true, labels: false,
   showPlane: true, clip: true, showDome: true, showLine: false,
+  buildUp: false,
   colour: "depth", playing: false,
 };
+
+/* Build-up mode reveals an organoid once the focus has reached its own plane,
+   so descending through the stack assembles the reconstruction in front of you
+   rather than presenting it finished. It is the honest animation of what the
+   method does: every object here exists because its rim came into focus at one
+   particular depth, and this is that claim made visible. */
+const revealed = o => !state.buildUp || o.z_slice <= state.z + 0.5;
 
 for (const o of ORG) o._fov = (TILES.find(t => t.name === o.tile) || {index:-1}).index;
 const shown = o => state.fovs.has(o._fov);
@@ -208,7 +226,29 @@ function outlineOf(o){
 
 /* ================================================================= 2D pane */
 const c2d = document.getElementById("c2d"), g2 = c2d.getContext("2d");
-const stackImgs = DATA.stack.map(src => { const i = new Image(); i.src = src; return i; });
+/* Slices are decoded when they are first looked at, not all at once on load.
+   Handing the browser a hundred and nineteen data URIs up front makes it decode
+   every one before the first frame appears, which is most of a minute of
+   nothing; on demand, the first slice is up immediately. Neighbours are warmed
+   in the background so stepping and playback stay smooth. */
+const stackImgs = new Array(NZ);
+function sliceImage(z){
+  z = Math.max(0, Math.min(NZ - 1, z));
+  let im = stackImgs[z];
+  if (!im){
+    im = new Image();
+    im.addEventListener("load", () => { dirty2 = true; planeSrc = null; dirty3 = true; });
+    im.src = DATA.stack[z];
+    stackImgs[z] = im;
+  }
+  return im;
+}
+function warmNeighbours(z){
+  for (const d of [1, -1, 2, -2, 3]) {
+    const k = z + d;
+    if (k >= 0 && k < NZ && !stackImgs[k]) { sliceImage(k); break; }
+  }
+}
 const imgEdf = new Image(); imgEdf.src = DATA.mosaic_edf;
 const tileImgs = new Map();
 for (const t of TILES){ const i = new Image(); i.src = t.edf; tileImgs.set(t.index, i); }
@@ -226,7 +266,7 @@ function currentPhoto(){
     if (only !== null) return {img: tileImgs.get(only), tile: TILES.find(t => t.index === only)};
     return {img: imgEdf, tile: null};
   }
-  return {img: stackImgs[Math.min(state.z, NZ - 1)], tile: null};
+  return {img: sliceImage(state.z), tile: null};
 }
 function draw2d(){
   dirty2 = false;
@@ -263,6 +303,7 @@ function draw2d(){
      photograph is actually evidence for, rather than decorating all of them
      equally. */
   for (const o of shownList()){
+    if (!revealed(o)) continue;
     const poly = outlineOf(o);
     const here = atDepth(o);
     const sel = o === state.selected;
@@ -316,6 +357,7 @@ function pick2d(mx, my){
   const wx = (mx - view.x)/view.k, wy = (my - view.y)/view.k;
   let best = null, bd = 1e9;
   for (const o of shownList()){
+    if (!revealed(o)) continue;
     const d = Math.hypot(o.x_mosaic_px - wx, o.y_mosaic_px - wy);
     const reach = Math.max(o.radius_px, 8/view.k);
     if (d < reach && (atDepth(o) ? d : d + 1e4) < bd){ bd = atDepth(o) ? d : d + 1e4; best = o; }
@@ -539,7 +581,7 @@ let dirty3 = true;
 function draw3d(){
   dirty3 = false;
   for (const [uid, m] of meshes){
-    const o = m.userData.o, vis = shown(o);
+    const o = m.userData.o, vis = shown(o) && revealed(o);
     m.visible = vis;
     if (!vis) continue;
     const sel = o === state.selected;
@@ -659,7 +701,10 @@ function renderStats(){
   const med = a => { const v = a.filter(x => typeof x === "number" && isFinite(x)).sort((p,q)=>p-q);
                      return v.length ? v[Math.floor(v.length/2)] : null; };
   document.getElementById("k-n").textContent = list.length;
-  document.getElementById("k-f").textContent = list.filter(atDepth).length;
+  document.getElementById("k-f-l").textContent =
+    state.buildUp ? "Revealed so far" : "In focus here";
+  document.getElementById("k-f").textContent =
+    state.buildUp ? list.filter(revealed).length : list.filter(atDepth).length;
   const d = med(list.map(o => o.diameter_px));
   document.getElementById("k-d").innerHTML = d === null ? "—"
     : (CAL ? `${(d*PX).toFixed(0)}<span class="u"> µm</span>` : `${d.toFixed(0)}<span class="u"> px</span>`);
@@ -676,10 +721,15 @@ function setZ(z){
   state.z = Math.max(0, Math.min(NZ - 1, z|0));
   document.getElementById("zslider").value = state.z;
   document.getElementById("znum").textContent = state.z + 1;
-  document.getElementById("zum").textContent = CAL ? ` · ${(state.z*ZU).toFixed(0)} µm deep` : "";
+  const above = M.substrate_slice - state.z;
+  document.getElementById("zum").textContent =
+    (CAL ? ` · ${(state.z*ZU).toFixed(0)} µm from the top` : "") +
+    (above > 0 ? ` · ${above.toFixed(0)} slices above the glass`
+               : ` · at or below the glass`);
   document.getElementById("lab2d").textContent = state.mode === "slice"
     ? `Raw slice Z${String(state.z+1).padStart(3,"0")}` : "All-in-focus projection";
   renderStats();
+  warmNeighbours(state.z);
   dirty2 = dirty3 = true;
 }
 function resize(){
@@ -701,12 +751,23 @@ function onMove(e){
   drag.moved = Math.abs(dx) + Math.abs(dy);
   if (drag.pane === "3d"){
     if (drag.pan){
-      const dir = new THREE.Vector3().subVectors(camera.position, orbit.target).normalize();
-      const right = new THREE.Vector3().crossVectors(dir, camera.up).normalize();
-      const up = new THREE.Vector3().crossVectors(right, dir).normalize();
-      const k = orbit.radius * 0.0016;
+      /* The screen axes are read straight off the camera's world matrix rather
+         than rebuilt from cross products. Getting a cross product's operand
+         order wrong silently yields the opposite vector, and the whole scene
+         then slides the wrong way under the mouse; the matrix cannot be
+         ambiguous about which way is right and which is up.
+
+         Scale is set so the point under the cursor stays under the cursor: the
+         visible height at the target's distance divided by the canvas height is
+         exactly how much world moves per pixel of mouse. */
+      camera.updateMatrixWorld();
+      const right = new THREE.Vector3(), up = new THREE.Vector3();
+      camera.matrixWorld.extractBasis(right, up, new THREE.Vector3());
+      const perPixel = 2 * orbit.radius *
+        Math.tan(camera.fov * Math.PI / 360) / Math.max(1, c3d.clientHeight);
       orbit.target.copy(drag.target)
-        .addScaledVector(right, -dx * k).addScaledVector(up, dy * k);
+        .addScaledVector(right, -dx * perPixel)
+        .addScaledVector(up, dy * perPixel);
     } else {
       orbit.theta = drag.theta + dx * 0.006;
       orbit.phi = Math.max(0.30, Math.min(Math.PI - 0.30, drag.phi + dy * 0.006));
@@ -759,6 +820,7 @@ const toggle = (id, get, set) => {
 };
 toggle("b-dome",   () => state.showDome,  v => state.showDome = v);
 toggle("b-line",   () => state.showLine,  v => state.showLine = v);
+toggle("b-build",  () => state.buildUp,   v => { state.buildUp = v; renderStats(); });
 toggle("b-plane",  () => state.showPlane, v => state.showPlane = v);
 toggle("b-clip",   () => state.clip,      v => state.clip = v);
 toggle("b-borders",() => state.borders,   v => state.borders = v);
@@ -789,6 +851,22 @@ window.addEventListener("keydown", e => {
   else if (e.key === "t" || e.key === "T") topCamera();
 });
 document.getElementById("zmax").textContent = NZ;
+/* The slider spans the whole stack, but only part of it was analysed: below the
+   glass there is nothing to measure, and just above it the dish surface is
+   sharper than any organoid. Marking both keeps that visible instead of leaving
+   a viewer to wonder why the reconstruction stops. */
+{
+  const marks = document.getElementById("zmarks");
+  const at = z => `${(100 * z / Math.max(1, NZ - 1)).toFixed(2)}%`;
+  const add = (z, text, cls) => {
+    const s = document.createElement("span");
+    s.className = cls || ""; s.style.left = at(z); s.textContent = text;
+    marks.appendChild(s);
+  };
+  add(0, "top of stack");
+  if (M.z_analysed && M.z_analysed < NZ - 1) add(M.z_analysed, "measured to here");
+  if (M.substrate_slice < NZ - 1) add(M.substrate_slice, "glass", "glass");
+}
 
 document.getElementById("hmeta").textContent =
   `${M.dataset} · ${M.n_rows}×${M.n_cols} fields · ${M.width}×${M.height}×${NZ}`
@@ -806,6 +884,6 @@ let lastPlay = 0;
   if (dirty3) draw3d();
   requestAnimationFrame(loop);
 })(0);
-for (const im of [imgEdf, ...stackImgs, ...tileImgs.values()])
+for (const im of [imgEdf, ...tileImgs.values()])
   im.addEventListener("load", () => { dirty2 = true; planeSrc = null; dirty3 = true; });
 </script>

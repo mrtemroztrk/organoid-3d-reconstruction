@@ -90,6 +90,9 @@ HARNESS = r"""
 
     // --- the stack is a stack, and stepping through it changes the picture ---
     ok(NZ > 50, `${NZ} slices embedded, so depth can actually be stepped through`);
+    ok(NZ === M.z_total,
+       `the whole stack is here: ${NZ} of ${M.z_total} slices, not just the ` +
+       `${M.z_analysed} that were analysed`);
     ok(state.mode === "slice", "the viewer opens on the raw stack, not the projection");
     const z0 = state.z;
     const img0 = currentPhoto().img;
@@ -97,6 +100,9 @@ HARNESS = r"""
     ok(state.z === z0 + 10 && +document.getElementById("zslider").value === z0 + 10,
        "the slider follows setZ");
     ok(currentPhoto().img !== img0, "a different slice shows a different photograph");
+    ok(stackImgs.filter(Boolean).length < NZ,
+       `slices decode on demand -- ${stackImgs.filter(Boolean).length} of ${NZ} ` +
+       `have been touched, not all of them on load`);
     ok(dirty2 === true, "changing slice asks the photo pane to repaint");
 
     // --- and the 3D plane and clip follow it ---
@@ -148,6 +154,32 @@ HARNESS = r"""
         worst = Math.max(worst, Math.abs(d - M.dome.radius_px));
       }
       ok(worst < 1.0, `every cap vertex lies on the fitted sphere (worst ${worst.toFixed(2)} px)`);
+    }
+
+    // --- build-up: the reconstruction assembles as the focus descends ---
+    {
+      const keep = state.z;
+      state.buildUp = true;
+      const counts = [];
+      for (const z of [5, Math.round(NZ*0.35), Math.round(NZ*0.7), NZ-1]){
+        setZ(z); draw3d();
+        let vis = 0;
+        for (const [uid, m] of meshes) if (m.visible) vis++;
+        counts.push(vis);
+      }
+      ok(counts[0] < counts[counts.length-1],
+         `descending reveals organoids progressively (${counts.join(" -> ")})`);
+      ok(counts.every((v, i) => i === 0 || v >= counts[i-1]),
+         "the count never goes backwards as the focus descends");
+      ok(counts[counts.length-1] === ORG.length,
+         `by the bottom of the stack all ${ORG.length} are present`);
+      setZ(5); draw3d();
+      const shallow = [...meshes.values()].filter(m => m.visible);
+      ok(shallow.every(m => m.userData.o.z_slice <= 5.5),
+         "nothing is revealed before the focus has reached its own plane");
+      state.buildUp = false; setZ(keep); draw3d();
+      ok([...meshes.values()].every(m => m.visible),
+         "switching build-up off brings everything back");
     }
 
     // --- the photograph is mapped onto the plane the same way the outlines
@@ -203,6 +235,33 @@ HARNESS = r"""
     const panned = orbit.target.distanceTo(home.t);
     ok(panned > 1, `right-drag pans the target (${panned.toFixed(0)} units)`);
     ok(Math.abs(orbit.theta - home.th) < 1e-9, "right-drag does not rotate");
+
+    // Direction, not just magnitude. The scene has to follow the mouse: drag
+    // right and the specimen goes right. Getting this backwards is invisible to
+    // any test that only checks that something moved.
+    {
+      const probe = new THREE.Vector3(M.width/2, M.height/2, ZW(M.substrate_slice/2));
+      resetCamera(); placeCamera(); camera.updateMatrixWorld();
+      const a = probe.clone().project(camera);
+      orbitDrag(2, false, 140, 0);
+      placeCamera(); camera.updateMatrixWorld();
+      const b = probe.clone().project(camera);
+      const W3 = renderer.domElement.width;
+      const movedPx = (b.x - a.x) * W3 / 2;
+      ok(movedPx > 20,
+         `dragging right by 140 px carries the scene right by ${movedPx.toFixed(0)} px`);
+
+      resetCamera(); placeCamera(); camera.updateMatrixWorld();
+      const c = probe.clone().project(camera);
+      orbitDrag(2, false, 0, 140);
+      placeCamera(); camera.updateMatrixWorld();
+      const d2 = probe.clone().project(camera);
+      const H3 = renderer.domElement.height;
+      const movedDown = -(d2.y - c.y) * H3 / 2;    // NDC y is up, screen y is down
+      ok(movedDown > 20,
+         `dragging down by 140 px carries it down by ${movedDown.toFixed(0)} px`);
+    }
+    resetCamera();
 
     resetCamera();
     orbitDrag(0, true, 100, 60);
