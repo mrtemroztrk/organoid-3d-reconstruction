@@ -45,6 +45,12 @@ class Substrate:
     votes: dict[str, float]
     rejected: dict[str, float]
     contrast: dict[str, float]
+    metadata_slice: float | None = None
+    """Where the instrument's own per-image score says the field is sharpest,
+    averaged over the tiles. It costs nothing -- it is already in the group file
+    -- and it is arrived at without touching a pixel, so agreement with the
+    measured plane is a genuinely independent confirmation rather than the same
+    computation done twice."""
 
     @property
     def spread_slices(self) -> float:
@@ -68,6 +74,11 @@ class Substrate:
         for name, value in sorted(self.rejected.items()):
             lines.append(f"  {name} did not see it (contrast "
                          f"{self.contrast[name]:.2f}) and was left out")
+        if self.metadata_slice is not None:
+            gap = abs(self.metadata_slice - self.slice_index)
+            lines.append(f"  the instrument's own recorded focus score peaks at "
+                         f"slice {self.metadata_slice + 1:.0f}, {gap:.0f} slices "
+                         f"away - an independent check that used no pixels")
         return "\n".join(lines)
 
 
@@ -163,7 +174,17 @@ def find_substrate(mosaic: Mosaic, slices: MosaicSlices,
             progress(n + 1, len(mosaic))
 
     plane = float(np.median(list(votes.values()))) if votes else float(depth - 1)
-    return Substrate(plane, votes, rejected, contrast)
+
+    from .keyence import read_focus_scores
+
+    scores = read_focus_scores(mosaic.tiles[0].folder.parent)
+    meta_plane = None
+    if scores:
+        stacked = np.vstack([s for s in scores.values() if s.size == depth])
+        if stacked.size:
+            meta_plane = float(np.nanmean(stacked, axis=0).argmax())
+
+    return Substrate(plane, votes, rejected, contrast, metadata_slice=meta_plane)
 
 
 # --------------------------------------------------------------------------- #

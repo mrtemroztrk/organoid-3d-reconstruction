@@ -18,6 +18,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
+
 from .config import Acquisition
 
 def _decode_double(raw: str | None) -> float | None:
@@ -218,6 +220,51 @@ def _parse_file_list(blob: bytes) -> dict[str, tuple[int, int]]:
         off += length + 8                               # name, then the double
         cells.setdefault(name.split("_Z")[0], (int(row), int(col)))
     return cells
+
+
+def read_focus_scores(folder: str | Path) -> dict[str, np.ndarray]:
+    """The per-image score the instrument recorded, as {stack name: score by Z}.
+
+    Every record in the file list ends with a double that rises and falls with
+    depth and peaks where the field is sharpest. Averaged over the tiles it
+    locates the well bottom without reading a single pixel, which makes it an
+    independent check on a glass plane found the expensive way -- and the two
+    agree exactly on this dataset.
+    """
+    import numpy as np
+
+    gci = _find_gci(Path(folder))
+    if gci is None:
+        return {}
+    with zipfile.ZipFile(gci) as zf:
+        try:
+            blob = zf.read("GroupFileProperty/ImageList/FileList")
+        except KeyError:
+            return {}
+
+    n_records = struct.unpack_from("<I", blob, 0)[0]
+    off = 4
+    collected: dict[str, dict[int, float]] = {}
+    for _ in range(n_records):
+        length, off = _read_7bit_length(blob, off)
+        off += length
+        _, z_index, _, _ = struct.unpack_from("<4i", blob, off)
+        off += 16
+        length, off = _read_7bit_length(blob, off)
+        name = blob[off:off + length].decode("utf-8", "replace")
+        off += length
+        (value,) = struct.unpack_from("<d", blob, off)
+        off += 8
+        collected.setdefault(name.split("_Z")[0], {})[int(z_index)] = float(value)
+
+    out: dict[str, np.ndarray] = {}
+    for stack, by_z in collected.items():
+        depth = max(by_z) + 1
+        arr = np.full(depth, np.nan)
+        for z, v in by_z.items():
+            arr[z] = v
+        out[stack] = arr
+    return out
 
 
 def read_tile_layout(folder: str | Path) -> tuple[TileLayout | None, dict]:

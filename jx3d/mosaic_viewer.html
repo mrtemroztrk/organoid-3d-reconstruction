@@ -1,0 +1,562 @@
+<meta charset="utf-8">
+<title>JX-3D — whole dome</title>
+<style>
+:root{
+  --bg:#080b12; --panel:#0e1320; --panel2:#141b2c; --line:#222c44;
+  --ink:#e8eefc; --dim:#8a97b4; --accent:#5ec8ff; --warn:#ffb454; --good:#7ee081;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+  font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+#app{display:grid;grid-template-rows:auto 1fr auto;height:100vh}
+header{display:flex;align-items:center;gap:14px;padding:8px 14px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:14px;margin:0;font-weight:600;letter-spacing:.2px}
+.meta{color:var(--dim);font-size:11.5px}
+.spacer{flex:1}
+button,.btn{background:var(--panel2);color:var(--ink);border:1px solid var(--line);
+  border-radius:6px;padding:4px 9px;font-size:11.5px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.on{background:#173049;border-color:var(--accent);color:#fff}
+main{display:grid;grid-template-columns:1fr 1fr 320px;min-height:0}
+.pane{position:relative;min-width:0;min-height:0;background:#05070c;
+  border-right:1px solid var(--line);overflow:hidden}
+canvas{display:block;width:100%;height:100%}
+.pane-label{position:absolute;left:10px;top:8px;font-size:11px;color:var(--dim);
+  background:#000a;padding:2px 7px;border-radius:4px;pointer-events:none}
+.pane-hint{position:absolute;left:10px;bottom:8px;font-size:10.5px;color:var(--dim);
+  background:#000a;padding:2px 7px;border-radius:4px;pointer-events:none}
+aside{background:var(--panel);overflow-y:auto;padding:10px;display:flex;
+  flex-direction:column;gap:10px}
+.card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px}
+.card h2{font-size:11px;margin:0 0 7px;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.7px;font-weight:600}
+.fovgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
+.fov{aspect-ratio:4/3;border:1px solid var(--line);border-radius:5px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:12px;
+  background:#0b1020;color:var(--dim);position:relative;user-select:none}
+.fov.on{background:#123049;border-color:var(--accent);color:#fff}
+.fov .n{position:absolute;left:4px;top:2px;font-size:9.5px;opacity:.75}
+.rowbtns{display:flex;gap:5px;margin-top:6px}
+.rowbtns button{flex:1}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.kpi{background:#0b1020;border-radius:6px;padding:6px 8px}
+.kpi .l{font-size:10px;color:var(--dim)}
+.kpi .v{font-size:16px;font-weight:600}
+.kpi .u{font-size:10px;color:var(--dim);font-weight:400}
+table.feat{width:100%;border-collapse:collapse;font-size:11px}
+table.feat td{padding:2px 4px;border-bottom:1px solid #1b2338;vertical-align:top}
+table.feat td.k{color:var(--dim);white-space:nowrap}
+table.feat td.v{text-align:right;font-variant-numeric:tabular-nums}
+.grp{color:var(--accent);font-size:10px;text-transform:uppercase;letter-spacing:.6px;
+  padding-top:7px}
+.note{font-size:10.5px;color:var(--dim);margin-top:6px}
+.toggles{display:flex;flex-wrap:wrap;gap:5px}
+footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 14px;
+  display:flex;align-items:center;gap:12px}
+input[type=range]{flex:1;accent-color:var(--accent)}
+.flag{display:inline-block;background:#3a2a10;color:var(--warn);border-radius:4px;
+  padding:1px 5px;font-size:10px;margin:1px 2px 0 0}
+#tip{position:fixed;pointer-events:none;background:#000d;border:1px solid var(--line);
+  border-radius:5px;padding:4px 7px;font-size:11px;display:none;z-index:99}
+</style>
+<div id="app">
+<header>
+  <h1>JX-3D — whole dome</h1>
+  <div class="meta" id="hmeta"></div>
+  <div class="spacer"></div>
+  <button id="b-line" class="">Border line</button>
+  <button id="b-dome" class="on">Dome surface</button>
+  <div class="meta" id="hcount"></div>
+</header>
+<main>
+  <div class="pane" id="p2d">
+    <canvas id="c2d"></canvas>
+    <div class="pane-label" id="lab2d">All-in-focus mosaic</div>
+    <div class="pane-hint">Wheel: zoom · Drag: pan · Click: select</div>
+  </div>
+  <div class="pane" id="p3d">
+    <canvas id="c3d"></canvas>
+    <div class="pane-label">3D reconstruction</div>
+    <div class="pane-hint">Drag: rotate · Right-drag: pan · Wheel: zoom · Click: select</div>
+  </div>
+  <aside>
+    <div class="card">
+      <h2>Fields of view</h2>
+      <div class="fovgrid" id="fovgrid"></div>
+      <div class="rowbtns">
+        <button id="f-all">All 15</button><button id="f-none">None</button>
+      </div>
+      <div class="note" id="fovnote"></div>
+    </div>
+    <div class="card">
+      <h2>Shown</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="l">Organoids</div><div class="v" id="k-n">0</div></div>
+        <div class="kpi"><div class="l">Median diameter</div><div class="v" id="k-d">—</div></div>
+        <div class="kpi"><div class="l">Median border gap</div><div class="v" id="k-b">—</div></div>
+        <div class="kpi"><div class="l">Seen twice</div><div class="v" id="k-v">—</div></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Colour by</h2>
+      <div class="toggles" id="colourby"></div>
+      <div class="note" id="cnote"></div>
+    </div>
+    <div class="card" id="detailcard">
+      <h2>Feature table</h2>
+      <div id="detail"><div class="note">Click an organoid, in either pane.</div></div>
+    </div>
+  </aside>
+</main>
+<footer>
+  <span class="meta">Slice <b id="znum">1</b>/<span id="zmax">1</span><span id="zum"></span></span>
+  <input type="range" id="zslider" min="0" max="0" value="0">
+  <button id="b-edf" class="on">Show all-in-focus</button>
+</footer>
+</div>
+<div id="tip"></div>
+<script>/*__THREE__*/</script>
+<script>
+const DATA = /*__DATA__*/;
+const M = DATA.meta, ORG = DATA.organoids, TILES = DATA.tiles;
+const CAL = M.calibrated, PX = M.px_um || 1, ZU = M.z_um || 1, ANI = M.anisotropy;
+
+/* ------------------------------------------------------------------ state */
+const state = {
+  fovs: new Set(TILES.map(t => t.index)),
+  selected: null,
+  z: Math.round((M.substrate_slice || M.depth) * 0.5),
+  showEdf: true,
+  showDome: true,
+  showLine: false,
+  colour: "depth",
+};
+
+/* Each organoid belongs to the tile whose view was elected, which is the tile
+   its numbers actually came from. An organoid also visible in a neighbour is
+   not shown twice when both are on -- it is one organoid, and that is the whole
+   point of the merge. */
+for (const o of ORG) o._fov = tileIndexOf(o.tile);
+function tileIndexOf(name){
+  const t = TILES.find(t => t.name === name);
+  return t ? t.index : -1;
+}
+function shown(o){ return state.fovs.has(o._fov); }
+function shownList(){ return ORG.filter(shown); }
+
+/* ------------------------------------------------------------- colour maps */
+const RAMP = [[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+function ramp(t){
+  t = Math.max(0, Math.min(1, t)) * (RAMP.length - 1);
+  const i = Math.min(RAMP.length - 2, Math.floor(t)), f = t - i;
+  return RAMP[i].map((v, k) => v + f * (RAMP[i+1][k] - v));
+}
+function css(t){ const c = ramp(t).map(Math.round); return `rgb(${c[0]},${c[1]},${c[2]})`; }
+
+const COLOURS = {
+  depth:   {label:"Depth",           get:o=>o.z_slice,             note:"Slice of best focus. Deeper organoids sit nearer the glass."},
+  size:    {label:"Diameter",        get:o=>o.diameter_px,         note:"Equatorial diameter, measured on the focal plane."},
+  border:  {label:"Border gap",      get:o=>o.nearest_border_px,   note:"Distance from the organoid surface to the nearest gel boundary. Low = near the edge of the droplet."},
+  contrast:{label:"Rim − core",      get:o=>o.rim_minus_core_od,   note:"Optical density of the rim minus the core. A live cyst is empty in the middle and dark at the rim, so this is large; a necrotic one fills in and it collapses."},
+  texture: {label:"Core granularity",get:o=>o.core_glcm_contrast_d2,note:"Co-occurrence contrast inside the core. Debris-filled lumens are granular."},
+};
+let RANGE = {lo:0, hi:1};
+function recolour(){
+  const g = COLOURS[state.colour].get;
+  const vals = ORG.map(g).filter(v => typeof v === "number" && isFinite(v));
+  RANGE.lo = vals.length ? Math.min(...vals) : 0;
+  RANGE.hi = vals.length ? Math.max(...vals) : 1;
+  for (const o of ORG){
+    const v = g(o);
+    o._t = (typeof v === "number" && isFinite(v))
+      ? (v - RANGE.lo) / Math.max(1e-9, RANGE.hi - RANGE.lo) : null;
+    o._css = o._t === null ? "#5b6478" : css(o._t);
+  }
+  document.getElementById("cnote").textContent = COLOURS[state.colour].note;
+}
+
+/* ================================================================= 2D pane */
+const c2d = document.getElementById("c2d"), g2 = c2d.getContext("2d");
+const imgEdf = new Image(); imgEdf.src = DATA.mosaic_edf;
+const scrubImgs = DATA.scrub.map(s => { const i = new Image(); i.src = s.img; return i; });
+const tileImgs = new Map();
+for (const t of TILES){ const i = new Image(); i.src = t.edf; tileImgs.set(t.index, i); }
+let view = {x:0, y:0, k:0.3}, dirty2 = true;
+
+function fitView(){
+  const w = c2d.width / M.width, h = c2d.height / M.height;
+  view.k = Math.min(w, h) * 0.96;
+  view.x = (c2d.width - M.width * view.k) / 2;
+  view.y = (c2d.height - M.height * view.k) / 2;
+}
+function nearestScrub(z){
+  let best = 0, bd = 1e9;
+  DATA.scrub.forEach((s, i) => { const d = Math.abs(s.z - z); if (d < bd){ bd = d; best = i; } });
+  return best;
+}
+function draw2d(){
+  dirty2 = false;
+  g2.setTransform(1,0,0,1,0,0);
+  g2.fillStyle = "#05070c"; g2.fillRect(0,0,c2d.width,c2d.height);
+  g2.setTransform(view.k,0,0,view.k,view.x,view.y);
+  g2.imageSmoothingEnabled = true;
+
+  const only = state.fovs.size === 1 ? [...state.fovs][0] : null;
+  if (state.showEdf){
+    if (only !== null){
+      const t = TILES.find(t => t.index === only), im = tileImgs.get(only);
+      if (im && im.complete) g2.drawImage(im, t.x0, t.y0, t.w, t.h);
+    } else if (imgEdf.complete){
+      g2.drawImage(imgEdf, 0, 0, M.width, M.height);
+    }
+  } else {
+    const im = scrubImgs[nearestScrub(state.z)];
+    if (im && im.complete) g2.drawImage(im, 0, 0, M.width, M.height);
+  }
+
+  /* dim the fields that are switched off, so the selection is visible in the
+     photograph and not only in the 3D view */
+  g2.fillStyle = "rgba(5,7,12,0.74)";
+  for (const t of TILES) if (!state.fovs.has(t.index)) g2.fillRect(t.x0, t.y0, t.w, t.h);
+
+  g2.lineWidth = 1.2 / view.k;
+  g2.strokeStyle = "rgba(94,200,255,0.30)";
+  for (const t of TILES) if (state.fovs.has(t.index)) g2.strokeRect(t.x0, t.y0, t.w, t.h);
+
+  if (state.showDome && M.dome){
+    const d = M.dome;
+    const rz = Math.sqrt(Math.max(0, d.radius_px**2 - ((state.z - d.cz_slice)*ANI)**2));
+    g2.strokeStyle = "rgba(126,224,129,0.85)"; g2.lineWidth = 2.2/view.k;
+    g2.beginPath(); g2.arc(d.cx_px, d.cy_px, rz, 0, 6.283); g2.stroke();
+    g2.strokeStyle = "rgba(126,224,129,0.30)"; g2.lineWidth = 1.4/view.k;
+    g2.beginPath(); g2.arc(d.cx_px, d.cy_px, d.contact_radius_px, 0, 6.283); g2.stroke();
+  }
+
+  for (const o of shownList()){
+    const near = Math.abs(o.z_slice - state.z) < 3 || state.showEdf;
+    g2.strokeStyle = o._css;
+    g2.globalAlpha = (o === state.selected) ? 1 : (near ? 0.9 : 0.25);
+    g2.lineWidth = (o === state.selected ? 3.0 : 1.5) / view.k;
+    g2.beginPath();
+    g2.arc(o.x_mosaic_px, o.y_mosaic_px, o.radius_px, 0, 6.283);
+    g2.stroke();
+  }
+  g2.globalAlpha = 1;
+
+  if (state.showLine && state.selected && M.dome) drawBorderLine(state.selected);
+}
+function drawBorderLine(o){
+  const d = M.dome;
+  const dx = o.x_mosaic_px - d.cx_px, dy = o.y_mosaic_px - d.cy_px;
+  const rad = Math.hypot(dx, dy) || 1e-6;
+  /* Where the gel boundary lies at this organoid's own depth: the cap's
+     cross-section there, along the direction leading straight out of the dome. */
+  const rz = Math.sqrt(Math.max(0, d.radius_px**2 - ((o.z_slice - d.cz_slice)*ANI)**2));
+  const ex = d.cx_px + dx/rad*rz, ey = d.cy_px + dy/rad*rz;
+  g2.strokeStyle = "#ffb454"; g2.lineWidth = 2.4/view.k; g2.setLineDash([7/view.k, 5/view.k]);
+  g2.beginPath(); g2.moveTo(o.x_mosaic_px, o.y_mosaic_px); g2.lineTo(ex, ey); g2.stroke();
+  g2.setLineDash([]);
+  g2.fillStyle = "#ffb454";
+  g2.beginPath(); g2.arc(ex, ey, 4/view.k, 0, 6.283); g2.fill();
+}
+
+function pick2d(mx, my){
+  const wx = (mx - view.x) / view.k, wy = (my - view.y) / view.k;
+  let best = null, bd = 1e9;
+  for (const o of shownList()){
+    const d = Math.hypot(o.x_mosaic_px - wx, o.y_mosaic_px - wy);
+    if (d < Math.max(o.radius_px, 6/view.k) && d < bd){ bd = d; best = o; }
+  }
+  return best;
+}
+
+/* ================================================================= 3D pane */
+const c3d = document.getElementById("c3d");
+const renderer = new THREE.WebGLRenderer({canvas:c3d, antialias:true});
+renderer.setClearColor(0x05070c, 1);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(42, 1, 1, 200000);
+scene.add(new THREE.AmbientLight(0xffffff, 0.62));
+const key = new THREE.DirectionalLight(0xffffff, 0.85); key.position.set(1,-1,-1);
+scene.add(key);
+
+const CX = M.width/2, CY = M.height/2, CZ = (M.substrate_slice*ANI)/2;
+const sphere = new THREE.SphereGeometry(1, 14, 10);
+const meshes = new Map();
+const group = new THREE.Group(); scene.add(group);
+for (const o of ORG){
+  const m = new THREE.Mesh(sphere, new THREE.MeshLambertMaterial({color:0xffffff}));
+  m.position.set(o.x_mosaic_px, o.y_mosaic_px, o.z_slice*ANI);
+  const r = o.radius_px;
+  m.scale.set(r, r, r * (o.radius_z_slices ? (o.radius_z_slices*ANI)/r : 1));
+  m.userData.o = o;
+  group.add(m); meshes.set(o.uid, m);
+}
+let domeMesh = null, glassMesh = null, lineObj = null;
+if (M.dome){
+  const d = M.dome;
+  const maxTheta = Math.acos(Math.max(-1, Math.min(1,
+    ((d.cz_slice - M.substrate_slice)*ANI)/d.radius_px)));
+  const g = new THREE.SphereGeometry(d.radius_px, 64, 40, 0, 6.283, 0, maxTheta);
+  domeMesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({
+    color:0x7ee081, transparent:true, opacity:0.13, side:THREE.DoubleSide,
+    depthWrite:false}));
+  domeMesh.position.set(d.cx_px, d.cy_px, d.cz_slice*ANI);
+  domeMesh.rotation.x = Math.PI;              /* cap opens downward, towards the glass */
+  scene.add(domeMesh);
+  const gg = new THREE.RingGeometry(d.contact_radius_px*0.995, d.contact_radius_px, 96);
+  glassMesh = new THREE.Mesh(gg, new THREE.MeshBasicMaterial({color:0x7ee081}));
+  glassMesh.position.set(d.cx_px, d.cy_px, M.substrate_slice*ANI);
+  scene.add(glassMesh);
+}
+
+const cam = {az: -0.6, el: 0.5, dist: Math.max(M.width, M.height)*1.5,
+             tx: CX, ty: CY, tz: CZ};
+function placeCamera(){
+  camera.position.set(
+    cam.tx + cam.dist*Math.cos(cam.el)*Math.cos(cam.az),
+    cam.ty + cam.dist*Math.cos(cam.el)*Math.sin(cam.az),
+    cam.tz - cam.dist*Math.sin(cam.el));
+  camera.up.set(0,0,-1);
+  camera.lookAt(cam.tx, cam.ty, cam.tz);
+}
+let dirty3 = true;
+function draw3d(){
+  dirty3 = false;
+  for (const [uid, m] of meshes){
+    const o = m.userData.o, vis = shown(o);
+    m.visible = vis;
+    if (!vis) continue;
+    const sel = o === state.selected;
+    m.material.color.set(sel ? 0xffffff : (o._css || "#5b6478"));
+    m.material.emissive.set(sel ? 0x333333 : 0x000000);
+  }
+  if (domeMesh) domeMesh.visible = state.showDome;
+  if (glassMesh) glassMesh.visible = state.showDome;
+  updateLine3d();
+  placeCamera();
+  renderer.render(scene, camera);
+}
+function updateLine3d(){
+  if (lineObj){ scene.remove(lineObj); lineObj.geometry.dispose(); lineObj = null; }
+  if (!(state.showLine && state.selected && M.dome)) return;
+  const o = state.selected, d = M.dome;
+  /* The closest point on a sphere's surface to an interior point lies along the
+     line from the sphere's centre through it, which is what makes the drawn
+     line the actual shortest distance rather than a convenient projection. */
+  const vx = o.x_mosaic_px - d.cx_px, vy = o.y_mosaic_px - d.cy_px,
+        vz = (o.z_slice - d.cz_slice)*ANI;
+  const len = Math.hypot(vx, vy, vz) || 1e-6;
+  const ex = d.cx_px + vx/len*d.radius_px,
+        ey = d.cy_px + vy/len*d.radius_px,
+        ez = (d.cz_slice*ANI) + vz/len*d.radius_px;
+  const geo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(o.x_mosaic_px, o.y_mosaic_px, o.z_slice*ANI),
+    new THREE.Vector3(ex, ey, ez)]);
+  lineObj = new THREE.Line(geo, new THREE.LineBasicMaterial({color:0xffb454}));
+  scene.add(lineObj);
+}
+const ray = new THREE.Raycaster();
+function pick3d(mx, my){
+  const r = c3d.getBoundingClientRect();
+  ray.setFromCamera(new THREE.Vector2((mx/r.width)*2-1, -(my/r.height)*2+1), camera);
+  const hits = ray.intersectObjects(group.children.filter(m => m.visible));
+  return hits.length ? hits[0].object.userData.o : null;
+}
+
+/* ================================================================== sidebar */
+const GROUPS = [
+  ["Identity", ["uid","tile","tile_row","tile_col","n_views","views","coverage_k"]],
+  ["Position", ["x_mosaic_px","y_mosaic_px","z_slice","dome_radial_px","dome_radial_frac",
+                "dome_azimuth_deg","height_above_glass_slices"]],
+  ["Dome border", ["nearest_border_px","dome_distance_px","contact_edge_distance_px",
+                   "nearest_border_is_cap"]],
+  ["Size", ["diameter_px","radius_px","area_px2","volume_voxels","radius_z_slices"]],
+  ["Shape", ["circularity","solidity","convexity","radius_cv","radius_min_over_max",
+             "harmonic_1","harmonic_2","harmonic_3","harmonic_high"]],
+  ["Core vs rim", ["rim_minus_core_od","core_over_rim_od","core_rim_separation",
+                   "core_fill_fraction","core_od_mean","rim_od_mean","core_od_std",
+                   "core_od_entropy"]],
+  ["Texture", ["core_glcm_contrast_d1","core_glcm_contrast_d2","core_glcm_contrast_d4",
+               "core_glcm_homogeneity_d2","core_glcm_energy_d2","core_glcm_correlation_d2",
+               "core_grad_mean","rim_over_core_grad"]],
+  ["Focus", ["focus_sharpness","n_slices","best_slice"]],
+  ["Neighbours", ["nn_distance_px","nn_gap_px","n_within_5r"]],
+  ["Quality", ["appearance_measurable","background_dn","background_tilt_frac",
+               "background_clipped_frac","lateral_spread_px","axial_spread_slices",
+               "radius_ratio","missing_blocks"]],
+];
+const FLAGS = ["clipped","clipped_everywhere","single_view_in_overlap",
+               "radius_disagreement","same_tile_twice","guarantee_void"];
+
+function fmt(v){
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "number") {
+    if (!isFinite(v)) return "—";
+    return Math.abs(v) >= 1000 || (Math.abs(v) < 0.01 && v !== 0)
+      ? v.toExponential(2) : v.toFixed(Math.abs(v) >= 100 ? 1 : 3);
+  }
+  return String(v);
+}
+function renderDetail(){
+  const el = document.getElementById("detail");
+  const o = state.selected;
+  if (!o){ el.innerHTML = '<div class="note">Click an organoid, in either pane.</div>'; return; }
+  let h = "";
+  const on = FLAGS.filter(f => o[f]);
+  if (on.length) h += on.map(f => `<span class="flag">${f.replace(/_/g," ")}</span>`).join("") ;
+  h += '<table class="feat">';
+  for (const [name, keys] of GROUPS){
+    const present = keys.filter(k => k in o);
+    if (!present.length) continue;
+    h += `<tr><td class="grp" colspan="2">${name}</td></tr>`;
+    for (const k of present) h += `<tr><td class="k">${k}</td><td class="v">${fmt(o[k])}</td></tr>`;
+  }
+  h += "</table>";
+  if (CAL && o.diameter_px)
+    h += `<div class="note">${(o.diameter_px*PX).toFixed(0)} µm across`
+       + (o.nearest_border_px != null ? `, ${(o.nearest_border_px*PX/1000).toFixed(2)} mm from the nearest gel boundary` : "")
+       + `.</div>`;
+  el.innerHTML = h;
+}
+
+function renderFovs(){
+  const g = document.getElementById("fovgrid");
+  g.innerHTML = "";
+  const byrc = new Map(TILES.map(t => [t.row+","+t.col, t]));
+  for (let r = 0; r < M.n_rows; r++) for (let c = 0; c < M.n_cols; c++){
+    const t = byrc.get(r+","+c);
+    const d = document.createElement("div");
+    d.className = "fov" + (t && state.fovs.has(t.index) ? " on" : "");
+    d.innerHTML = t ? `<span class="n">${t.row+1},${t.col+1}</span>${t.index}` : "";
+    if (t) d.onclick = e => {
+      if (e.shiftKey){ state.fovs = new Set([t.index]); }
+      else if (state.fovs.has(t.index)) state.fovs.delete(t.index);
+      else state.fovs.add(t.index);
+      refresh();
+    };
+    g.appendChild(d);
+  }
+  document.getElementById("fovnote").textContent =
+    `Click to toggle, shift-click for that field alone. ${state.fovs.size} of ${TILES.length} shown.`;
+}
+function renderColours(){
+  const box = document.getElementById("colourby");
+  box.innerHTML = "";
+  for (const [k, v] of Object.entries(COLOURS)){
+    const b = document.createElement("button");
+    b.textContent = v.label; b.className = state.colour === k ? "on" : "";
+    b.onclick = () => { state.colour = k; recolour(); refresh(); };
+    box.appendChild(b);
+  }
+}
+function renderStats(){
+  const list = shownList();
+  const med = (a) => { const v = a.filter(x => typeof x === "number" && isFinite(x)).sort((p,q)=>p-q);
+                       return v.length ? v[Math.floor(v.length/2)] : null; };
+  document.getElementById("k-n").textContent = list.length;
+  const d = med(list.map(o => o.diameter_px));
+  document.getElementById("k-d").innerHTML = d === null ? "—"
+    : (CAL ? `${(d*PX).toFixed(0)}<span class="u"> µm</span>` : `${d.toFixed(0)}<span class="u"> px</span>`);
+  const b = med(list.map(o => o.nearest_border_px));
+  document.getElementById("k-b").innerHTML = b === null ? "—"
+    : (CAL ? `${(b*PX/1000).toFixed(2)}<span class="u"> mm</span>` : `${b.toFixed(0)}<span class="u"> px</span>`);
+  const twice = list.filter(o => o.n_views > 1).length;
+  document.getElementById("k-v").innerHTML =
+    `${twice}<span class="u"> / ${list.length}</span>`;
+}
+
+/* ==================================================================== glue */
+function select(o){ state.selected = o; renderDetail(); dirty2 = dirty3 = true; }
+function refresh(){ renderFovs(); renderColours(); renderStats(); dirty2 = dirty3 = true; }
+
+function resize(){
+  for (const [cv, pane] of [[c2d,"p2d"],[c3d,"p3d"]]){
+    const el = document.getElementById(pane);
+    const w = Math.max(2, el.clientWidth), h = Math.max(2, el.clientHeight);
+    if (cv === c3d){
+      renderer.setSize(w, h, false);
+      camera.aspect = w/h; camera.updateProjectionMatrix();
+    } else { cv.width = w; cv.height = h; }
+  }
+  fitView(); dirty2 = dirty3 = true;
+}
+window.addEventListener("resize", resize);
+
+let drag = null;
+c2d.addEventListener("mousedown", e => drag = {x:e.clientX, y:e.clientY, moved:0});
+window.addEventListener("mousemove", e => {
+  if (!drag) return;
+  if (drag.pane3){
+    cam.az -= (e.clientX - drag.x)*0.008; cam.el += (e.clientY - drag.y)*0.008;
+    cam.el = Math.max(-1.5, Math.min(1.5, cam.el));
+  } else {
+    view.x += e.clientX - drag.x; view.y += e.clientY - drag.y;
+  }
+  drag.moved += Math.abs(e.clientX-drag.x) + Math.abs(e.clientY-drag.y);
+  drag.x = e.clientX; drag.y = e.clientY; dirty2 = dirty3 = true;
+});
+window.addEventListener("mouseup", () => drag = null);
+c2d.addEventListener("click", e => {
+  if (drag && drag.moved > 4) return;
+  const r = c2d.getBoundingClientRect();
+  select(pick2d(e.clientX - r.left, e.clientY - r.top));
+});
+c2d.addEventListener("wheel", e => {
+  e.preventDefault();
+  const r = c2d.getBoundingClientRect(), mx = e.clientX-r.left, my = e.clientY-r.top;
+  const f = e.deltaY < 0 ? 1.15 : 1/1.15;
+  view.x = mx - (mx - view.x)*f; view.y = my - (my - view.y)*f; view.k *= f;
+  dirty2 = true;
+}, {passive:false});
+
+c3d.addEventListener("mousedown", e => drag = {x:e.clientX, y:e.clientY, moved:0, pane3:true});
+c3d.addEventListener("click", e => {
+  if (drag && drag.moved > 4) return;
+  const r = c3d.getBoundingClientRect();
+  select(pick3d(e.clientX - r.left, e.clientY - r.top));
+});
+c3d.addEventListener("wheel", e => {
+  e.preventDefault(); cam.dist *= e.deltaY < 0 ? 0.9 : 1.1; dirty3 = true;
+}, {passive:false});
+c3d.addEventListener("contextmenu", e => e.preventDefault());
+
+document.getElementById("f-all").onclick = () => { state.fovs = new Set(TILES.map(t=>t.index)); refresh(); };
+document.getElementById("f-none").onclick = () => { state.fovs = new Set(); refresh(); };
+document.getElementById("b-dome").onclick = e => {
+  state.showDome = !state.showDome; e.target.className = state.showDome ? "on" : ""; dirty2 = dirty3 = true; };
+document.getElementById("b-line").onclick = e => {
+  state.showLine = !state.showLine; e.target.className = state.showLine ? "on" : ""; dirty2 = dirty3 = true; };
+document.getElementById("b-edf").onclick = e => {
+  state.showEdf = !state.showEdf; e.target.className = state.showEdf ? "on" : "";
+  document.getElementById("lab2d").textContent =
+    state.showEdf ? "All-in-focus mosaic" : "Raw mosaic slice";
+  dirty2 = true; };
+const zs = document.getElementById("zslider");
+zs.max = M.depth - 1; zs.value = state.z;
+zs.oninput = () => {
+  state.z = +zs.value;
+  document.getElementById("znum").textContent = state.z + 1;
+  document.getElementById("zum").textContent = CAL ? ` · ${(state.z*ZU).toFixed(0)} µm` : "";
+  if (!state.showEdf || state.showDome) dirty2 = true;
+};
+document.getElementById("zmax").textContent = M.depth;
+
+document.getElementById("hmeta").textContent =
+  `${M.dataset} · ${M.n_rows}×${M.n_cols} fields · ${M.width}×${M.height} px`
+  + (CAL ? ` (${(M.width*PX/1000).toFixed(1)}×${(M.height*PX/1000).toFixed(1)} mm)` : "")
+  + ` · offsets ${M.offset_source}, residual ${M.registration_residual_px} px`;
+document.getElementById("hcount").textContent =
+  `${ORG.length} organoids from ${M.n_sightings} sightings (${M.n_merged} merged)`;
+
+recolour(); refresh(); resize(); zs.oninput();
+(function loop(){
+  if (dirty2) draw2d();
+  if (dirty3) draw3d();
+  requestAnimationFrame(loop);
+})();
+window.addEventListener("load", () => { dirty2 = true; });
+for (const im of [imgEdf, ...scrubImgs, ...tileImgs.values()])
+  im.addEventListener("load", () => { dirty2 = true; });
+</script>

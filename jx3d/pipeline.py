@@ -57,13 +57,24 @@ class Result:
 # caching
 # --------------------------------------------------------------------------- #
 
-def _cache_key(stack: ZStack, params: Params) -> dict:
+def _cache_key(stack: ZStack, params: Params, z_limit: int) -> dict:
+    """What a cached result depends on.
+
+    `z_limit` belongs here even though it is not a segmentation parameter. The
+    projection and the labels are built over a range of slices, so a run that
+    analyses a different range must not be served a cached result computed for
+    the old one -- and that is not hypothetical: supplying the substrate plane
+    from outside changes the range on exactly the tiles where the per-tile
+    search got it wrong, which are the tiles whose cached results would be most
+    misleading to reuse.
+    """
     return {
         "detector": params.detector,
         "z_step": params.z_step,
         "shape": list(stack.data.shape),
         "expected_diameter_px": params.expected_diameter_px,
         "files": len(stack.files),
+        "z_limit": int(z_limit),
     }
 
 
@@ -88,7 +99,8 @@ def _cache_save(outdir: Path, name: str, key: dict, arr: np.ndarray) -> None:
 def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
         gpu: bool = True, use_cache: bool = True, jpeg_quality: int = 72,
         min_sharpness: float = 0.25, build_html: bool = True,
-        calibration: dict | None = None) -> Result:
+        calibration: dict | None = None,
+        substrate_override: float | None = None) -> Result:
     params = params or Params()
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -102,7 +114,6 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
         setattr(stack.acq, field, value)
         if field in ("px_um", "z_um"):
             setattr(stack.acq, f"{field}_source", "user")
-    key = _cache_key(stack, params)
     _log("  " + stack.describe().replace("\n", "\n  "))
     if stack.meta.get("source"):
         _log(f"  metadata: {Path(stack.meta['source']).name}")
@@ -110,9 +121,22 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
     # ------------------------------------------------------- 2. focus profile
     _log("\n[2/7] Focus profile and glass surface")
     profile = focusmod.global_profile(stack.data)
-    substrate = focusmod.find_substrate_plane(profile)
+    if substrate_override is not None:
+        # In a tiled scan the glass is one plane shared by every tile, and some
+        # tiles cannot see it: under the thickest gel its reflection never
+        # becomes the sharpest thing in the field, and the per-field search then
+        # settles thirty slices high, truncating the analysed range through the
+        # densest part of the droplet. When the caller knows the plane from all
+        # the tiles at once, that is better evidence than this field alone.
+        substrate = int(round(substrate_override))
+        own = focusmod.find_substrate_plane(profile)
+        _log(f"  glass plane      : Z{substrate + 1:03d}  (given by the mosaic; "
+             f"this field alone would have said Z{own + 1:03d})")
+    else:
+        substrate = focusmod.find_substrate_plane(profile)
+        _log(f"  sharpest plane   : Z{substrate + 1:03d}  (well bottom / glass surface)")
     z_limit = max(3, min(stack.depth, substrate - params.substrate_margin_slices + 1))
-    _log(f"  sharpest plane   : Z{substrate + 1:03d}  (well bottom / glass surface)")
+    key = _cache_key(stack, params, z_limit)
     _log(f"  analysed range   : Z001 - Z{z_limit:03d}")
     _log(f"  depth of field   : ~{stack.acq.depth_of_field_um:.0f} µm "
          f"(~{stack.acq.depth_of_field_um / stack.acq.z_um:.1f} slices)"
@@ -275,8 +299,13 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
     _log(f"  → {len(organoids)} organoids")
 
     if not organoids:
-        _log("\n!! No organoids found. Lower --min-sharpness, or widen the size "
-             "range with --min-diameter / --max-diameter.")
+        # An empty field is a real answer, not a failure to answer. In a tiled
+        # scan the corner tiles fall outside the droplet entirely, and a caller
+        # collecting fifteen results needs an empty table from those rather than
+        # a missing file it has to guess the meaning of.
+        _log("\n   No organoids in this field. If that is unexpected, lower "
+             "--min-sharpness or widen --min-diameter / --max-diameter.")
+        _write_tables(organoids, stack, params, substrate, outdir, dome)
         return Result(stack, organoids, profile, substrate, outdir, fstack, dome)
 
     d = np.array([o.diameter_px for o in organoids])
