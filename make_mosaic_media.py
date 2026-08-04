@@ -213,6 +213,63 @@ def stitching_figure(mosaic, slices, meta, docs, z, width=1500):
     print(f"  {docs / 'stitching.png'}")
 
 
+def overlap_gif(mosaic, slices, meta, docs, z, width=820, n=26):
+    """Two neighbouring fields sliding into place, one over the other.
+
+    The four-panel figure says what the overlap is; this shows it happening. The
+    right-hand field starts a long way off, slides to where the stage log put
+    it, and then to where the pixels say it belongs -- and the point of the
+    animation is that the last step is small and still obvious, because two
+    copies of the same organoid a few pixels apart are unmistakable when they
+    are moving.
+    """
+    a, b = mosaic.at(0, 0), mosaic.at(0, 1)
+    ia, ib = slices.tile_slice(a, z), slices.tile_slice(b, z)
+    ox = b.x0 - a.x0                      # the refined offset, in pixels
+    stage = round(a.width * 0.70)         # what the stage log alone would give
+    pad = 150
+    H = a.height
+    W = int(ox + b.width + pad)
+
+    def frame(dx, caption, sub, tint):
+        canvas = np.zeros((H, W), np.float32)
+        wsum = np.zeros((H, W), np.float32)
+        canvas[:, :a.width] += ia; wsum[:, :a.width] += 1
+        x = int(round(dx))
+        x0, x1 = max(0, x), min(W, x + b.width)
+        if x1 > x0:
+            canvas[:, x0:x1] += ib[:, x0 - x:x1 - x]
+            wsum[:, x0:x1] += 1
+        img = np.divide(canvas, np.maximum(wsum, 1), out=np.zeros_like(canvas))
+        vis = cv2.cvtColor(np.clip(img, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
+        # mark where each field lies, so the overlap is visible as an overlap
+        cv2.rectangle(vis, (0, 1), (a.width, H - 2), GOLD, 3)
+        if x1 > x0:
+            cv2.rectangle(vis, (x, 1), (min(W - 1, x + b.width), H - 2), tint, 3)
+        vis = fit_width(vis, width)
+        return cv2.cvtColor(label(vis, caption, sub), cv2.COLOR_BGR2RGB)
+
+    frames = []
+    for t in np.linspace(0, 1, n):                       # slide in from the right
+        dx = b.width * 0.98 * (1 - t) + stage * t
+        frames.append(frame(dx, "field 2 slides towards field 1",
+                            "they were photographed 2.5 mm apart on the stage",
+                            (90, 200, 120)))
+    frames += [frame(stage, "where the stage log puts it",
+                     "close, and out by enough to count one organoid twice",
+                     (90, 200, 120))] * 10
+    for t in np.linspace(0, 1, 8):                       # the refinement
+        frames.append(frame(stage + (ox - stage) * t,
+                            "refined against the overlapping pixels",
+                            f"{abs(ox - stage):.0f} px further; the pairs now agree "
+                            f"to {meta['registration']['residual_px']:.2f} px",
+                            AMBER))
+    frames += [frame(ox, "one image, joined",
+                     "the shared strip is averaged, so the seam disappears",
+                     AMBER)] * 14
+    save_gif(docs / "overlap.gif", frames, 110, palettesize=96)
+
+
 def dome_gif(mosaic, slices, meta, docs, width=560, n=20):
     """The droplet's cross-section widening as the focus descends.
 
@@ -366,6 +423,7 @@ def main(argv=None) -> int:
     print("building figures:")
     assembly_gif(mosaic, slices, docs, z)
     stitching_figure(mosaic, slices, meta, docs, z)
+    overlap_gif(mosaic, slices, meta, docs, z)
     dome_gif(mosaic, slices, meta, docs)
     fov_gif(mosaic, slices, rows, docs, z)
     border_figure(mosaic, slices, meta, rows, docs)

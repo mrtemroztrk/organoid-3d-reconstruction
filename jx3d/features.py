@@ -307,6 +307,26 @@ def intensity_features(regions: Regions, od: np.ndarray) -> dict[str, float]:
     out.update(_stats(od[regions.annulus], "rim"))
     out.update(_stats(od[regions.body], "body"))
 
+    body = od[regions.body]
+    if body.size >= 4:
+        # Does the outline contain an object at all? An organoid absorbs light;
+        # gel does not. If the enclosed region is no more absorbing than the
+        # background estimated from the ring around it, then whatever the
+        # segmenter drew, there is nothing inside it.
+        #
+        # This catches a failure that no shape test can see. A ragged outline
+        # may be a genuinely ragged organoid, but an outline sitting on empty
+        # gel is wrong however smooth it is -- and on this dataset the two
+        # populations barely overlap: of twenty-five empty outlines, the shape
+        # flag caught one.
+        #
+        # The threshold is six per cent absorption, which is an order of
+        # magnitude below what any real organoid here shows (median 52 %) and an
+        # order of magnitude above the noise of an 8-bit image against a
+        # fitted background.
+        out["body_od_mean"] = float(body.mean())
+        out["outline_empty"] = float(out["body_od_mean"] < 0.06)
+
     core = od[regions.core]
     rim = od[regions.annulus]
     if core.size >= 4 and rim.size >= 4:
@@ -617,6 +637,12 @@ VIABILITY_COLUMNS: list[tuple[str, str]] = [
     ("solidity", "outline area over its convex hull: how lobed or dented it is"),
     ("radius_cv", "variation of the radius around the outline, a scale-free "
                   "measure of how irregular the boundary is"),
+    ("outline_empty", "the outline encloses nothing more absorbing than the gel "
+                      "around it, so the segmenter drew a boundary where there "
+                      "is no object. Unambiguously wrong, unlike an irregular "
+                      "shape, and invisible to any test of shape -- of the "
+                      "twenty-five found on this dataset, the shape check caught "
+                      "one. Drop these rows"),
     ("shape_suspect", "the outline has a notch or a raggedness an organoid does "
                       "not have, so the segmenter probably cut into it or merged "
                       "it with a neighbour. Affects a small minority -- two of a "

@@ -75,6 +75,7 @@ def _cache_key(stack: ZStack, params: Params, z_limit: int) -> dict:
         "expected_diameter_px": params.expected_diameter_px,
         "files": len(stack.files),
         "z_limit": int(z_limit),
+        "flat_fielded": bool(stack.meta.get("flat_fielded")),
     }
 
 
@@ -100,7 +101,8 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
         gpu: bool = True, use_cache: bool = True, jpeg_quality: int = 72,
         min_sharpness: float = 0.25, build_html: bool = True,
         calibration: dict | None = None,
-        substrate_override: float | None = None) -> Result:
+        substrate_override: float | None = None,
+        flat_field=None) -> Result:
     params = params or Params()
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +112,20 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
     _log("=" * 74)
     _log("[1/7] Loading Z-stack")
     stack = load_stack(folder)
+    if flat_field is not None:
+        # Correct the illumination *before* anything is detected, not just
+        # before things are measured.
+        #
+        # The segmenter normalises each image by its own percentiles, so a frame
+        # with sixty grey levels of tilt across it spends much of that range on
+        # the gradient rather than on the specimen, and the dim corner of every
+        # field is where objects go missing. Measuring on corrected pixels while
+        # detecting on uncorrected ones also means the two disagree about what
+        # the image looks like, which is a strange position for a pipeline to
+        # take about its own data.
+        corrected = stack.data.astype(np.float32) / flat_field[None, :, :]
+        stack.data = np.clip(corrected, 0, 255).astype(np.uint8)
+        stack.meta["flat_fielded"] = True
     for field, value in (calibration or {}).items():
         setattr(stack.acq, field, value)
         if field in ("px_um", "z_um"):
@@ -137,6 +153,8 @@ def run(folder: str | Path, outdir: str | Path, params: Params | None = None,
         _log(f"  sharpest plane   : Z{substrate + 1:03d}  (well bottom / glass surface)")
     z_limit = max(3, min(stack.depth, substrate - params.substrate_margin_slices + 1))
     key = _cache_key(stack, params, z_limit)
+    if stack.meta.get("flat_fielded"):
+        _log("  illumination corrected before detection")
     _log(f"  analysed range   : Z001 - Z{z_limit:03d}")
     _log(f"  depth of field   : ~{stack.acq.depth_of_field_um:.0f} µm "
          f"(~{stack.acq.depth_of_field_um / stack.acq.z_um:.1f} slices)"
@@ -388,6 +406,7 @@ def _write_tables(organoids: list[Organoid], stack: ZStack, params: Params,
         "acquisition": acq.to_dict(),
         "params": params.to_dict(),
         "substrate_slice": int(substrate),
+        "flat_fielded": bool(stack.meta.get("flat_fielded")),
         "viewer_version": _viewer_version(),
         "dome": dome.to_dict() if dome is not None else None,
         "n_organoids": len(organoids),

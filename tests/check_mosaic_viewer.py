@@ -154,6 +154,14 @@ HARNESS = r"""
                                         m.material.clippingPlanes.length === 1),
          "and no material gains or loses a clipping plane, so nothing recompiles");
       state.clip = "above"; draw3d();
+
+      // and whether the models are drawn at all is independent of which side
+      state.showModels = false; draw3d();
+      ok([...meshes.values()].every(m => !m.visible),
+         "the organoids can be hidden entirely, leaving the photograph and dome");
+      ok(planeMesh.visible, "the photograph stays when the models are hidden");
+      state.showModels = true; draw3d();
+      ok([...meshes.values()].some(m => m.visible), "and they come back");
     }
     ok(Math.abs(planeMesh.position.z - ZW(state.z)) < 1e-6,
        "the plane sits at exactly the current slice's depth");

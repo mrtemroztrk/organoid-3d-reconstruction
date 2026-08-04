@@ -68,7 +68,8 @@ class MosaicResult:
 
 def analyse_tiles(mosaic: mosaicmod.Mosaic, substrate: float, params: Params,
                   outdir: Path, gpu: bool = True, use_cache: bool = True,
-                  min_sharpness: float = 0.25) -> dict[str, list[dict]]:
+                  min_sharpness: float = 0.25, flat_field=None
+                  ) -> dict[str, list[dict]]:
     """Run the validated single-field measurement on each tile in turn.
 
     One tile is resident at a time. The full mosaic volume is 750 million
@@ -95,7 +96,8 @@ def analyse_tiles(mosaic: mosaicmod.Mosaic, substrate: float, params: Params,
                        and cached.get("mode") == params.mode
                        and cached.get("detector") == params.detector
                        and cached.get("min_diameter_px") == params.min_diameter_px
-                       and cached.get("max_diameter_px") == params.max_diameter_px)
+                       and cached.get("max_diameter_px") == params.max_diameter_px
+                       and bool(payload.get("flat_fielded")) == (flat_field is not None))
             if matches:
                 per_tile[tile.name] = payload["organoids"]
                 _log(f"  {len(per_tile[tile.name])} organoids (cached)")
@@ -104,7 +106,8 @@ def analyse_tiles(mosaic: mosaicmod.Mosaic, substrate: float, params: Params,
                  f"(mode {cached.get('mode')} vs {params.mode}); re-measuring")
         run_tile(tile.folder, tile_out, params=params, gpu=gpu,
                  use_cache=use_cache, build_html=False,
-                 min_sharpness=min_sharpness, substrate_override=substrate)
+                 min_sharpness=min_sharpness, substrate_override=substrate,
+                 flat_field=flat_field)
         if result_path.exists():
             per_tile[tile.name] = json.loads(result_path.read_text())["organoids"]
         else:
@@ -236,7 +239,7 @@ def run(dataset: str | Path, outdir: str | Path, params: Params | None = None,
     _log("\n[5/7] Measuring each tile")
     per_tile = analyse_tiles(mosaic, substrate.slice_index, params, outdir,
                              gpu=gpu, use_cache=use_cache,
-                             min_sharpness=min_sharpness)
+                             min_sharpness=min_sharpness, flat_field=flat.gain)
 
     _log("\n[6/7] Merging the overlaps")
     organoids, report = dedupmod.merge(mosaic, per_tile, acq)

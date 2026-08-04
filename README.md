@@ -20,7 +20,7 @@ the source it came from — see [Units](#units).
 ![mosaic](docs/mosaic.png)
 
 *One Matrigel droplet, 8 mm across, assembled from fifteen overlapping
-brightfield Z-stacks. 844 organoids, each counted once and measured in a single
+brightfield Z-stacks. 951 organoids, each counted once and measured in a single
 coordinate frame.*
 
 ![slicer](docs/slicer.gif)
@@ -221,10 +221,6 @@ The projection has its own blind spot: two organoids at the same (x, y) but
 different depths merge into one blob. The per-slice path separates those. The
 default `--mode both` takes the union of the two and deduplicates.
 
-![depth map](docs/depth_map.png)
-
-*Per-pixel depth of best focus — the by-product that makes the projection work.*
-
 ---
 
 ## The whole dome
@@ -239,6 +235,14 @@ file from the organoid.
 ```bash
 ./.venv/bin/python run_mosaic.py BK52_WT_9805_B
 ```
+
+![overlap](docs/overlap.gif)
+
+*Two neighbouring fields, joined. The right-hand one slides to where the stage
+log put it — close, and out by enough to count one organoid twice — and then to
+where the pixels say it belongs. The last step is small and unmistakable,
+because two copies of the same organoid a few pixels apart are obvious the
+moment they move.*
 
 ![stitching](docs/stitching.png)
 
@@ -389,7 +393,7 @@ frame edge, and never from shape. A disc cut clean in half still scores 0.72 for
 circularity and sails through the 0.55 shape filter, so a shape test cannot see
 clipping at all; it only sees a slightly rounder object.
 
-On this dataset: **1306 sightings become 844 organoids**, so 35 % of raw
+On this dataset: **1440 sightings become 951 organoids**, so 34 % of raw
 detections were repeats. Where two tiles agreed an object was there, they placed
 it to a median of **0.39 px laterally and 0.58 slices in depth** — well inside
 the 4 px and 3.3-slice gates, which is why the gates are not a sensitive knob.
@@ -643,7 +647,7 @@ Still renders without a browser:
 
 ### Whole-dome feature matrix (`features.csv`)
 
-844 organoids × 139 columns on this dataset. The blocks, and what each is for:
+951 organoids on this dataset, 29 columns by default and 141 in `features_all.csv`. The blocks, and what each is for:
 
 | block | columns | what it carries |
 |---|---|---|

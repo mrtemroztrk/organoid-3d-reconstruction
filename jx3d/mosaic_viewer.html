@@ -75,6 +75,7 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 13px
   <h1>JX-3D — whole dome</h1>
   <div class="meta" id="hmeta"></div>
   <div class="spacer"></div>
+  <button id="b-models" class="on">Organoids</button>
   <button id="b-plane" class="on">Photo in 3D</button>
   <span class="meta">show</span><span id="clipmodes" class="toggles"></span>
   <button id="b-dome" class="on">Dome</button>
@@ -162,7 +163,8 @@ const state = {
   mode: "slice",            /* slice | edf */
   outline: 0.90, fill: 0.0, window: 4, allDepths: false,
   borders: true, labels: false,
-  showPlane: true, clip: "above", showDome: true, showLine: false,
+  showPlane: true, clip: "above", showModels: true, showDome: true,
+  showLine: false,
   buildUp: false,
   colour: "depth", playing: false,
 };
@@ -666,7 +668,7 @@ let dirty3 = true;
 function draw3d(){
   dirty3 = false;
   for (const [uid, m] of meshes){
-    const o = m.userData.o, vis = shown(o) && revealed(o);
+    const o = m.userData.o, vis = state.showModels && shown(o) && revealed(o);
     m.visible = vis;
     if (!vis) continue;
     const sel = o === state.selected;
@@ -703,7 +705,7 @@ const GROUPS = [
                    "nearest_border_is_cap"]],
   ["Size", ["diameter_px","diameter_um","radius_px","area_px2","volume_voxels",
             "radius_z_slices"]],
-  ["Shape", ["circularity","solidity","convexity","radius_cv","shape_suspect","radius_min_over_max",
+  ["Shape", ["circularity","solidity","convexity","radius_cv","shape_suspect","outline_empty","radius_min_over_max",
              "harmonic_1","harmonic_2","harmonic_3","harmonic_high"]],
   ["Core vs rim", ["rim_minus_core_od","core_over_rim_od","core_rim_separation",
                    "core_fill_fraction","core_od_mean","rim_od_mean","core_od_std",
@@ -719,10 +721,10 @@ const GROUPS = [
 ];
 /* Flags are shown as chips above the table, before any number, because they
    say whether the numbers below them mean anything. */
-const FLAGS = ["shape_suspect","clipped","clipped_everywhere",
+const FLAGS = ["outline_empty","shape_suspect","clipped","clipped_everywhere",
                "single_view_in_overlap","radius_disagreement","same_tile_twice",
                "guarantee_void"];
-const BOOLEAN_COLUMNS = new Set(["shape_suspect", "appearance_measurable",
+const BOOLEAN_COLUMNS = new Set(["shape_suspect", "outline_empty", "appearance_measurable",
                                  "nearest_border_is_cap"]);
 function fmt(v, key){
   if (v === null || v === undefined || v === "") return "—";
@@ -935,6 +937,12 @@ toggle("b-dome",   () => state.showDome,  v => state.showDome = v);
 toggle("b-line",   () => state.showLine,  v => state.showLine = v);
 toggle("b-build",  () => state.buildUp,   v => { state.buildUp = v; renderStats(); });
 toggle("b-plane",  () => state.showPlane, v => state.showPlane = v);
+/* Whether the models are drawn at all is a separate question from which side of
+   the photograph is kept. Turning them off leaves the photograph and the dome,
+   which is how you check what the picture looks like without the reconstruction
+   arguing with it -- and turning the photograph off instead leaves the models
+   alone. The two switches multiply, which is the point. */
+toggle("b-models", () => state.showModels, v => state.showModels = v);
 toggle("b-borders",() => state.borders,   v => state.borders = v);
 toggle("b-labels", () => state.labels,    v => state.labels = v);
 toggle("b-all-depths", () => state.allDepths, v => { state.allDepths = v; renderStats(); });
