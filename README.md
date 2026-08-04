@@ -20,7 +20,7 @@ the source it came from — see [Units](#units).
 ![mosaic](docs/mosaic.png)
 
 *One Matrigel droplet, 8 mm across, assembled from fifteen overlapping
-brightfield Z-stacks. 951 organoids, each counted once and measured in a single
+brightfield Z-stacks. 1174 organoids, each counted once and measured in a single
 coordinate frame.*
 
 ![slicer](docs/slicer.gif)
@@ -196,12 +196,27 @@ entirely.
 
 On the all-in-focus projection every organoid shows its rim *at the same time*,
 so the segmenter gets its best look at all of them at once. Measured on the same
-data with the same parameters:
+field with the same parameters:
 
-| detection mode | organoids found |
-|---|---|
-| per-slice + Z linking | 64 |
-| all-in-focus projection | 99 |
+| detection mode | organoids found | outlines enclosing nothing | runtime |
+|---|---|---|---|
+| all-in-focus projection alone | 88 | 11.4% | 17 s |
+| **projection + per-slice, every 4th slice** | **114** | **9.1%** | 170 s |
+
+The per-slice pass is not redundant, and this is the reason it is on by default.
+The projection decides *per pixel* which slice was sharpest, so where two
+organoids overlap in x and y it stitches one rim out of two depths and hands the
+segmenter a shape that never existed. Segmenting the raw slices instead catches
+each organoid on the plane where **its own** rim is sharpest, intact. That path
+alone has the worse recall — it gets one look per object — but the union of the
+two is better than either, and it is better on both axes at once: 30% more
+objects *and* proportionally fewer outlines that turn out to enclose no
+absorbing material.
+
+Every 4th slice, not every slice, because the depth of field spans about 3.3
+slices here. Each organoid is therefore segmentable on three or four consecutive
+planes, so a step of 4 still meets every one of them, and the finer steps mostly
+pay ten times the runtime to find the same object twice.
 
 ![edf](docs/edf.gif)
 
@@ -393,21 +408,29 @@ frame edge, and never from shape. A disc cut clean in half still scores 0.72 for
 circularity and sails through the 0.55 shape filter, so a shape test cannot see
 clipping at all; it only sees a slightly rounder object.
 
-On this dataset: **1440 sightings become 951 organoids**, so 34 % of raw
+On this dataset: **1819 sightings become 1174 organoids**, so 35 % of raw
 detections were repeats. Where two tiles agreed an object was there, they placed
-it to a median of **0.39 px laterally and 0.58 slices in depth** — well inside
-the 4 px and 3.3-slice gates, which is why the gates are not a sensitive knob.
-348 organoids were seen by more than one tile and carry a second, independent
-measurement of themselves.
+it to a median of **0.44 px laterally and 0.62 slices in depth** (p90 2.00 px /
+1.73 slices) — well inside the 4 px and 3.3-slice gates, which is why the gates
+are not a sensitive knob. 645 organoids were seen by more than one tile and
+carry a second, independent measurement of themselves.
 
-Two numbers are reported rather than quietly fixed. 188 organoids sit in a
+Two numbers are reported rather than quietly fixed. 312 organoids sit in a
 doubly-covered region but were found by only one of the two tiles; the other
 tile's segmenter missing something does not make it unreal, so they are kept and
-flagged. And the seam between the two central fields matched only a third of its
-detections while placing those matches to half a pixel — the tiles are in the
-right place, and the segmenter simply found different objects on either side of
-it, which is what happens under the thickest gel. Reporting a low match rate as
-a geometry failure would have been the wrong alarm.
+flagged. And the weakest seam matched only 64 % of its shared detections while
+every seam placed its matches to within 1.26 px — the tiles are in the right
+place, and the segmenter simply found different objects on either side of the
+seam, which is what happens under the thickest gel. Reporting a low match rate
+as a geometry failure would have been the wrong alarm.
+
+That same redundancy is the only label-free measure of recall available here.
+Where two fields both looked, 471 organoids were found by both and 312 by one
+only. If the two fields missed independently, a per-field detection probability
+p would give those two counts in the ratio p : 2(1−p), so p = 2/(ratio + 2) with
+ratio = 312/471 — **75 % for one field, 94 % for the pair**. The fields do not
+miss independently (a faint organoid is faint to both), so 75 % is an upper
+bound on what a single view catches. It is the number to beat.
 
 The physical check that matters passes: **100 % of the organoids fall inside the
 fitted droplet.** They grow in the gel, so anything else would have meant the
@@ -534,7 +557,8 @@ python -m venv .venv
 ./.venv/bin/python run_mosaic.py BK52_WT_9805_B
 ```
 
-About two minutes on a GTX 1650 Ti for fifteen fields in `--mode edf`, and the
+About forty minutes on a GTX 1650 Ti for fifteen fields at the default
+`--mode both`, or two minutes with `--mode edf` for a quick look, and the
 per-field results are cached, so re-running to change only the feature
 extraction does not re-segment anything. Peak memory is one tile at a time
 (~90 MB); the assembled volume would be 750 million voxels and is never held.
@@ -583,11 +607,12 @@ it finds, so it still does something sensible on data it has never seen.
 `--list` prints the candidates without running anything.
 
 ```bash
-# fastest: one segmentation pass on the projection (~30 s)
-python run.py <folder> --mode edf
+# default: projection + per-slice, so each organoid is also segmented
+# on the plane where its own rim is sharpest (~3 min a field)
+python run.py <folder>
 
-# most complete: projection + per-slice linking
-python run.py <folder> --mode both
+# quick look: the projection alone (~30 s), about 25% fewer objects
+python run.py <folder> --mode edf
 
 # no GPU / no cellpose
 python run.py <folder> --detector classical
@@ -647,7 +672,7 @@ Still renders without a browser:
 
 ### Whole-dome feature matrix (`features.csv`)
 
-951 organoids on this dataset, 29 columns by default and 141 in `features_all.csv`. The blocks, and what each is for:
+1174 organoids on this dataset, 29 columns by default and 141 in `features_all.csv`. The blocks, and what each is for:
 
 | block | columns | what it carries |
 |---|---|---|

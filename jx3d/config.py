@@ -166,8 +166,15 @@ class Params:
     min_circularity: float = 0.55
     """4*pi*A/P^2. Organoids are round; stringy Matrigel texture is not."""
 
-    z_step: int = 1
-    """Segment every Nth slice, for the per-slice path."""
+    z_step: int = 4
+    """Segment every Nth slice, for the per-slice path.
+
+    Four, not one, and the depth of field is the reason. A rim stays sharp over
+    about 3.3 slices here, so an organoid is segmentable on three or four
+    consecutive planes and sampling every fourth still catches every one of them
+    exactly once. Segmenting all of them costs ten times as much to find the
+    same objects twice.
+    """
 
     cellprob_threshold: float = -2.0
     """How confident Cellpose must be that a pixel belongs to a cell.
