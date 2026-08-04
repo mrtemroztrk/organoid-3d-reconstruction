@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from jx3d import blend as blendmod
 from jx3d import mosaic as mosaicmod
+from jx3d import register as registermod
 from jx3d.keyence import read_group_metadata, read_tile_layout
 
 _RESULTS: list[tuple[bool, str]] = []
@@ -80,6 +81,29 @@ def _seam_step(image: np.ndarray, m) -> float:
                 b = image[:, x:x + 2].mean(axis=1).astype(np.float32)
                 steps.append(np.abs(a - b).mean())
     return float(np.mean(steps)) if steps else 0.0
+
+
+def _overlap_disagreement(m, tiles, z: int) -> float:
+    """Mean brightness difference where two tiles both see the same pixel.
+
+    This is the direct question the offsets exist to answer, and unlike the
+    correlation peak it does not saturate: two views placed a few pixels apart
+    still correlate well, but they disagree pixel by pixel, and that
+    disagreement is what shrinks when the placement is right.
+    """
+    frames = {t.name: tiles.tile_slice(t, z) for t in m}
+    values = []
+    for a, b, _ in m.neighbour_pairs():
+        ox, oy = int(round(b.x0 - a.x0)), int(round(b.y0 - a.y0))
+        x0, y0 = max(0, ox), max(0, oy)
+        w = min(a.width, ox + b.width) - x0
+        h = min(a.height, oy + b.height) - y0
+        if w < 20 or h < 20:
+            continue
+        pa = frames[a.name][y0:y0 + h, x0:x0 + w]
+        pb = frames[b.name][y0 - oy:y0 - oy + h, x0 - ox:x0 - ox + w]
+        values.append(float(np.abs(pa - pb).mean()))
+    return float(np.mean(values)) if values else 0.0
 
 
 def run(dataset: Path) -> int:
@@ -176,6 +200,41 @@ def run(dataset: Path) -> int:
     ok(_seam_step(fused, m) < _seam_step(plain, m),
        f"blending softens the seams: mean step across a tile edge falls from "
        f"{_seam_step(plain, m):.2f} to {_seam_step(fused, m):.2f} grey levels")
+
+    # --- refining against the pixels agrees with itself, and improves matters ---
+    print("\n  refining the offsets:")
+    tiles = blendmod.MosaicSlices(m, flat, blend=False)
+    before = _overlap_disagreement(m, tiles, z)
+    m, reg = registermod.register(m, tiles)
+    after = _overlap_disagreement(m, tiles, z)
+
+    ok(reg.n_rejected == 0,
+       f"all {reg.n_used} neighbour pairs carried enough structure to match")
+    ok(reg.reliable,
+       f"the pairs agree on one geometry: residual median {reg.residual_px:.2f} px, "
+       f"p90 {reg.residual_p90_px:.2f} px against a {reg.tolerance_px:.0f} px tolerance")
+    ok(after < before,
+       f"where two tiles see the same pixel they now agree better: mean "
+       f"difference {before:.1f} -> {after:.1f} grey levels "
+       f"({100 * (before - after) / before:.0f}% closer)")
+    ok(all(t.offset_source == mosaicmod.REGISTERED for t in m),
+       "every tile records that its offset was checked against the images")
+
+    # The stage steps a known distance between tiles and the images say how many
+    # pixels that was, so the mosaic measures the pixel size independently of
+    # the calibration the instrument wrote. They should agree.
+    dx = float(np.mean([b.x0 - a.x0 for a, b, ax in m.neighbour_pairs() if ax == "x"]))
+    dy = float(np.mean([b.y0 - a.y0 for a, b, ax in m.neighbour_pairs() if ax == "y"]))
+    sx = float(np.median(np.abs(np.diff(sorted({t.stage_nm[0] for t in m})))))
+    sy = float(np.median(np.abs(np.diff(sorted({t.stage_nm[1] for t in m})))))
+    px_x, px_y = sx / dx / 1000.0, sy / dy / 1000.0
+    ok(abs(px_x - px_y) / px_x < 0.01,
+       f"the two axes measure the same pixel size ({px_x:.4f} vs {px_y:.4f} um/px), "
+       f"so the scan is square")
+    disagree = 100 * abs(acq.px_um - px_x) / acq.px_um
+    ok(disagree < 5.0,
+       f"stage-derived pixel size {px_x:.4f} um/px vs the instrument's "
+       f"{acq.px_um:.4f} ({acq.px_um_source}): {disagree:.2f}% apart")
 
     failed = sum(1 for good, _ in _RESULTS if not good)
     print(f"\n{len(_RESULTS) - failed} passed, {failed} failed")
