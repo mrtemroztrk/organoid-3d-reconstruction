@@ -126,11 +126,46 @@ HARNESS = r"""
        "the plane sits at exactly the current slice's depth");
     setZ(z0);
 
+    // --- an outline is only drawn where that organoid actually is ---
+    // An organoid is its full width only at its own equator; anywhere else the
+    // spheroid's cross-section is narrower, and past its axial extent this
+    // slice misses it completely. Drawing the equatorial outline at every depth
+    // put full-size rings on out-of-focus shadows, which is what made so many
+    // marked edges look wrong.
+    {
+      const keepMode = state.mode, keepAll = state.allDepths;
+      state.mode = "slice"; state.allDepths = false;
+      const probe = ORG.find(o => o.radius_z_slices > 2 && o.radial_profile_px);
+      setZ(Math.round(probe.z_slice));
+      const atEquator = crossScale(probe);
+      ok(Math.abs(atEquator - 1) < 0.02,
+         `at its own focal plane an organoid is drawn full width (${atEquator.toFixed(3)})`);
+      setZ(Math.round(probe.z_slice + probe.radius_z_slices * 0.6));
+      const partWay = crossScale(probe);
+      ok(partWay !== null && partWay < atEquator,
+         `part way out it narrows (${partWay === null ? "null" : partWay.toFixed(3)})`);
+      setZ(Math.round(probe.z_slice + probe.radius_z_slices + 3));
+      ok(crossScale(probe) === null,
+         "and beyond its axial extent it is not drawn at all");
+
+      // across the whole catalogue, a slice must not draw everything
+      setZ(Math.round(NZ * 0.2));
+      const drawn = ORG.filter(o => crossScale(o) !== null).length;
+      ok(drawn < ORG.length * 0.6,
+         `${drawn} of ${ORG.length} organoids are drawn on one slice, not all of them`);
+      state.mode = keepMode; state.allDepths = keepAll;
+      state.mode = "edf";
+      ok(crossScale(probe) === 1,
+         "on the all-in-focus projection every organoid is drawn at full width, " +
+         "because that image shows each one at its own equator");
+      state.mode = keepMode; setZ(z0);
+    }
+
     // --- outlines are the measured shape, not a stand-in circle ---
     const withOutline = ORG.filter(o => o.radial_profile_px && o.radial_profile_px.length);
     ok(withOutline.length > ORG.length * 0.9,
        `${withOutline.length}/${ORG.length} organoids carry their measured r(theta) outline`);
-    const poly = outlineOf(withOutline[0]);
+    const poly = outlineOf(withOutline[0], 1);
     ok(poly && poly.length >= 24, `an outline is a real polygon (${poly.length/2} vertices)`);
     const rr = withOutline[0].radial_profile_px;
     ok(Math.max(...rr) !== Math.min(...rr),

@@ -210,18 +210,51 @@ function recolour(){
   document.getElementById("cnote").textContent = COLOURS[state.colour].note;
 }
 
-/* outline polygon in mosaic pixels, from the measured r(theta) */
-function outlineOf(o){
+/* Trigonometry for the outline, computed once for each angular resolution. */
+const TRIG = new Map();
+function trig(n){
+  let t = TRIG.get(n);
+  if (!t){
+    t = {cos: new Float64Array(n), sin: new Float64Array(n)};
+    for (let i = 0; i < n; i++){
+      const a = 2 * Math.PI * i / n;
+      t.cos[i] = Math.cos(a); t.sin[i] = Math.sin(a);
+    }
+    TRIG.set(n, t);
+  }
+  return t;
+}
+
+/* How wide the organoid is on THIS slice, as a fraction of its widest.
+   An organoid is only that wide at its own equator. Cut the spheroid anywhere
+   else and the cross-section is smaller, and past its axial extent there is no
+   cross-section at all. Drawing the equatorial outline at every depth was the
+   reason so many marked edges looked wrong: on a slice thirty deep from its
+   focal plane an organoid is a soft grey shadow, and a full-size ring drawn on
+   it belongs to a plane the viewer is not looking at.
+
+   Returns null when this slice misses the organoid entirely. */
+function crossScale(o){
+  if (state.allDepths || state.mode === "edf") return 1;
+  const rz = o.radius_z_slices;
+  if (!rz || rz <= 0) return Math.abs(o.z_slice - state.z) <= state.window ? 1 : null;
+  const dz = state.z - o.z_slice;
+  if (Math.abs(dz) >= rz) return null;
+  return Math.sqrt(1 - (dz / rz) * (dz / rz));
+}
+
+/* outline polygon in mosaic pixels, from the measured r(theta), scaled to the
+   cross-section at the current depth */
+function outlineOf(o, scale){
   const r = o.radial_profile_px;
   if (!r || !r.length) return null;
-  if (o._poly) return o._poly;
-  const n = r.length, p = new Float32Array(n * 2);
+  const n = r.length, t = trig(n), p = new Float64Array(n * 2);
   for (let i = 0; i < n; i++){
-    const a = 2 * Math.PI * i / n;
-    p[2*i]   = o.x_mosaic_px + r[i] * Math.cos(a);
-    p[2*i+1] = o.y_mosaic_px + r[i] * Math.sin(a);
+    const rr = r[i] * scale;
+    p[2*i]   = o.x_mosaic_px + rr * t.cos[i];
+    p[2*i+1] = o.y_mosaic_px + rr * t.sin[i];
   }
-  return (o._poly = p);
+  return p;
 }
 
 /* ================================================================= 2D pane */
@@ -304,10 +337,12 @@ function draw2d(){
      equally. */
   for (const o of shownList()){
     if (!revealed(o)) continue;
-    const poly = outlineOf(o);
     const here = atDepth(o);
     const sel = o === state.selected;
-    const a = sel ? 1 : (here ? state.outline : state.outline * 0.20);
+    const scale = crossScale(o);
+    if (scale === null) continue;          /* this slice misses it entirely */
+    const poly = outlineOf(o, scale);
+    const a = sel ? 1 : (here ? state.outline : state.outline * 0.28);
     if (a <= 0.01 && !sel) continue;
     if (!poly){ continue; }
     g2.beginPath();
@@ -357,7 +392,9 @@ function pick2d(mx, my){
   const wx = (mx - view.x)/view.k, wy = (my - view.y)/view.k;
   let best = null, bd = 1e9;
   for (const o of shownList()){
-    if (!revealed(o)) continue;
+    /* Only what is drawn can be picked, or clicking empty gel selects an
+       organoid whose equator is thirty slices away. */
+    if (!revealed(o) || crossScale(o) === null) continue;
     const d = Math.hypot(o.x_mosaic_px - wx, o.y_mosaic_px - wy);
     const reach = Math.max(o.radius_px, 8/view.k);
     if (d < reach && (atDepth(o) ? d : d + 1e4) < bd){ bd = atDepth(o) ? d : d + 1e4; best = o; }
