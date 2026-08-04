@@ -91,14 +91,14 @@ pitch in micrometres to one decimal place, so the natural reading is units of
 0.1 µm, giving 10.0 µm per slice. That is an inference, so it is checked against
 something physical: the fitted Matrigel droplet.
 
-The dome fit gives a contact radius of 923 px and a height of 171 slices. Turn
-that into a spherical-cap volume under each candidate unit:
+The dome fit gives a contact radius of 932 px and a height of 172 slices.
+Turn that into a spherical-cap volume under each candidate unit:
 
 | assumed pitch | droplet height | droplet volume |
 |---|---|---|
 | 1 µm/slice | 0.17 mm | 3.3 µL |
-| **10 µm/slice** | **1.71 mm** | **35.2 µL** |
-| 100 µm/slice | 17.1 mm | 2939 µL |
+| **10 µm/slice** | **1.72 mm** | **36.0 µL** |
+| 100 µm/slice | 17.16 mm | 2977.3 µL |
 
 Matrigel domes are pipetted at roughly 20–50 µL. Only one of the three readings
 produces a droplet that could exist in a well, and it is the one the encoding
@@ -229,7 +229,7 @@ towards the glass, tracing the widening cross-section of the droplet. Collected
 over all slices, those points lie *on* the dome surface, and a sphere is fitted
 to them by RANSAC consensus followed by Huber-weighted refinement.
 
-One detail matters more than it looks. The gel *ends* at the far side of the
+Two details matter more than they look. The gel *ends* at the far side of the
 texture band, not at its brightest point — near the edge you are looking through
 a long slanted path of gel. Tracking the brightest point puts the surface inside
 the droplet and leaves 23% of the organoids apparently outside the gel they grew
@@ -241,7 +241,15 @@ in. Tracking the band's outer edge encloses 99% of them:
 | **outer edge of the band** | **5.5 px** | **98.6%** |
 
 The residual barely moves — both are good sphere fits — which is exactly why the
-physical check is the one that decides. Every run validates the fit against it,
+physical check is the one that decides.
+
+The second detail is that "outer" has no fixed direction. Scanning every row
+left-to-right, as this first did, quietly assumes the droplet edge lies to the
+right; on a field where it enters from another side the scan returns debris
+instead, and the fit is rejected. Each line is now scanned inward from both
+ends, in rows and in columns, and the consensus fit keeps whichever set actually
+lies on a sphere. Across the three fields in this dataset that yields droplets
+of 55, 50 and 36 µL — mutually consistent, and consistent with the pipette. Every run validates the fit against it,
 and **a dome that fails to enclose the organoids is rejected and no clearance
 values are reported**, rather than shipping a confident-looking wrong surface.
 
