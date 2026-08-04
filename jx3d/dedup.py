@@ -181,6 +181,34 @@ class MergeReport:
             return True
         return max(self.pair_residual_px[k] for k in judged) <= 4.0
 
+    n_double_covered: int = 0
+    n_seen_twice: int = 0
+    n_seen_once_in_overlap: int = 0
+
+    @property
+    def implied_recall(self) -> float | None:
+        """How much of what is there a single field finds, estimated from the
+        overlap alone -- no hand-labelled ground truth required.
+
+        Where two fields both photographed the same place, each had an
+        independent chance at every organoid in it. If a field detects with
+        recall r, then of the objects present it finds both-of-two with
+        probability r^2 and exactly-one-of-two with 2r(1-r), so the ratio of
+        those two counts gives r without anyone counting organoids by eye.
+
+        This is an UPPER bound, and the reason matters: the arithmetic assumes
+        the two fields miss independently, and they do not. An organoid that is
+        faint, or sitting under a lot of gel, is faint in both views, so the
+        objects missed by one field are exactly the ones the other is also
+        likely to miss. Real recall is lower than this number, by an amount the
+        overlap cannot reveal. It is still the only estimate available for free,
+        and it is the right thing to watch when changing the detector.
+        """
+        if self.n_seen_twice < 10:
+            return None
+        ratio = self.n_seen_once_in_overlap / self.n_seen_twice
+        return 2.0 / (ratio + 2.0)
+
     @property
     def recall_asymmetry(self) -> list[str]:
         """Populated seams where the two tiles largely disagreed on what was there.
@@ -221,6 +249,15 @@ class MergeReport:
             lines.append(f"  {skipped} seam(s) had too few detections to judge "
                          f"- they lie beyond the edge of the specimen, so "
                          f"matching nothing there means nothing")
+        r = self.implied_recall
+        if r is not None:
+            lines.append(
+                f"  where two fields both looked, {self.n_seen_twice} organoids "
+                f"were found by both and {self.n_seen_once_in_overlap} by one "
+                f"only, which puts single-field recall at no better than "
+                f"{100 * r:.0f}% and the pair at {100 * (1 - (1 - r) ** 2):.0f}% "
+                f"-- an upper bound, since the two fields do not miss "
+                f"independently")
         for seam in self.recall_asymmetry:
             lines.append(f"  seam {seam} matched only "
                          f"{100 * self.pair_match_rate[seam]:.0f}% of its "
@@ -248,6 +285,11 @@ class MergeReport:
             "pair_shared": dict(self.pair_shared),
             "informative_seams": len(self.informative_seams()),
             "recall_asymmetry_seams": self.recall_asymmetry,
+            "n_double_covered": self.n_double_covered,
+            "n_seen_twice": self.n_seen_twice,
+            "n_seen_once_in_overlap": self.n_seen_once_in_overlap,
+            "implied_single_field_recall_upper_bound": (
+                round(self.implied_recall, 4) if self.implied_recall else None),
             "reliable": self.reliable,
             "notes": list(self.notes),
         }
@@ -424,6 +466,14 @@ def merge(mosaic: Mosaic, per_tile: dict[str, list[dict]], acq: Acquisition,
         lateral_gate_px=lateral_floor_px,
         axial_gate_slices=axial_gate,
     )
+    # Where two fields both photographed a place, each had an independent
+    # chance at every organoid in it, and comparing how often they agreed
+    # with how often only one of them saw something gives a recall figure
+    # without anyone counting organoids by hand.
+    double = [o for o in organoids if o.coverage_k >= 2]
+    report.n_double_covered = len(double)
+    report.n_seen_twice = sum(1 for o in double if o.n_views >= 2)
+    report.n_seen_once_in_overlap = sum(1 for o in double if o.n_views == 1)
     n_single = sum(1 for o in organoids if o.single_view_in_overlap)
     if n_single:
         report.notes.append(

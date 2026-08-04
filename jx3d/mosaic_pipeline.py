@@ -85,25 +85,34 @@ def analyse_tiles(mosaic: mosaicmod.Mosaic, substrate: float, params: Params,
         _log(f"\n  ---- tile {n}/{len(mosaic)}: {tile.name} "
              f"(row {tile.row}, col {tile.col}) ----")
         if use_cache and result_path.exists():
-            # What a cached tile result depends on. The substrate is not enough:
-            # switching from the projection-only pass to the per-slice one
-            # changes what an outline means, and a cache keyed on depth alone
-            # would hand back the old answer under the new setting without
-            # saying so.
+            # What a cached tile result depends on: every analysis parameter,
+            # compared wholesale.
+            #
+            # This used to be a hand-written list of the parameters that
+            # "obviously" mattered, and it went stale three times -- once when
+            # the depth range became settable, once when the detection mode did,
+            # and once when the segmenter's thresholds did. Each time the
+            # symptom was the same and silent: a run that changed a setting was
+            # served the old answer and reported it as new. A list of exceptions
+            # cannot be trusted to stay complete, so there is no list. Anything
+            # that alters how a tile was measured invalidates it, and the cost
+            # of being wrong in the conservative direction is a few minutes of
+            # recomputation.
             payload = json.loads(result_path.read_text())
             cached = payload.get("params") or {}
-            matches = (payload.get("substrate_slice") == int(round(substrate))
-                       and cached.get("mode") == params.mode
-                       and cached.get("detector") == params.detector
-                       and cached.get("min_diameter_px") == params.min_diameter_px
-                       and cached.get("max_diameter_px") == params.max_diameter_px
+            wanted = params.to_dict()
+            differing = sorted(k for k in set(cached) | set(wanted)
+                               if cached.get(k) != wanted.get(k))
+            matches = (not differing
+                       and payload.get("substrate_slice") == int(round(substrate))
                        and bool(payload.get("flat_fielded")) == (flat_field is not None))
             if matches:
                 per_tile[tile.name] = payload["organoids"]
                 _log(f"  {len(per_tile[tile.name])} organoids (cached)")
                 continue
-            _log(f"  cached result was measured with different settings "
-                 f"(mode {cached.get('mode')} vs {params.mode}); re-measuring")
+            reason = (f"parameters changed ({', '.join(differing[:3])})" if differing
+                      else "depth range or illumination handling changed")
+            _log(f"  cached result no longer applies: {reason}; re-measuring")
         run_tile(tile.folder, tile_out, params=params, gpu=gpu,
                  use_cache=use_cache, build_html=False,
                  min_sharpness=min_sharpness, substrate_override=substrate,

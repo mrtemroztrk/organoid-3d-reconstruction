@@ -73,6 +73,8 @@ def _cache_key(stack: ZStack, params: Params, z_limit: int) -> dict:
         "z_step": params.z_step,
         "shape": list(stack.data.shape),
         "expected_diameter_px": params.expected_diameter_px,
+        "cellprob_threshold": params.cellprob_threshold,
+        "flow_threshold": params.flow_threshold,
         "files": len(stack.files),
         "z_limit": int(z_limit),
         "flat_fielded": bool(stack.meta.get("flat_fielded")),

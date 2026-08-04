@@ -4,6 +4,12 @@
 :root{
   --bg:#080b12; --panel:#0e1320; --panel2:#141b2c; --line:#222c44;
   --ink:#e8eefc; --dim:#8a97b4; --accent:#5ec8ff; --warn:#ffb454; --good:#7ee081;
+  /* Selection is magenta rather than white. White is what an out-of-focus rim
+     and a saturated background already are, so a white outline competes with
+     the photograph instead of standing out of it; magenta appears nowhere in a
+     brightfield image and nowhere in the viridis ramp the organoids are
+     coloured by. */
+  --sel:#ff2fbe;
 }
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
@@ -186,6 +192,8 @@ const shownList = () => ORG.filter(shown);
 const atDepth = o => state.allDepths || Math.abs(o.z_slice - state.z) <= state.window;
 
 /* ------------------------------------------------------------------ colour */
+const SEL = "#ff2fbe";
+const SEL_HEX = 0xff2fbe;
 const RAMP = [[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
 function ramp(t){
   t = Math.max(0, Math.min(1, t)) * (RAMP.length - 1);
@@ -357,11 +365,24 @@ function draw2d(){
       g2.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${state.fill * (sel?1:0.8)})`;
       g2.fill();
     }
-    g2.strokeStyle = sel ? "#ffffff" : o._css;
-    g2.globalAlpha = a;
-    g2.lineWidth = (sel ? 3.2 : (here ? 1.8 : 1.1)) / view.k;
-    g2.stroke();
-    g2.globalAlpha = 1;
+    if (sel){
+      /* two strokes: a wide translucent halo, then a hard bright core. One
+         stroke of any width reads as a line; a line inside a glow reads as
+         lit, and finds the eye on a busy field. */
+      g2.globalAlpha = 0.35;
+      g2.strokeStyle = SEL;
+      g2.lineWidth = 11 / view.k;
+      g2.stroke();
+      g2.globalAlpha = 1;
+      g2.lineWidth = 2.6 / view.k;
+      g2.stroke();
+    } else {
+      g2.strokeStyle = o._css;
+      g2.globalAlpha = a;
+      g2.lineWidth = (here ? 1.8 : 1.1) / view.k;
+      g2.stroke();
+      g2.globalAlpha = 1;
+    }
   }
   if (state.showLine && state.selected && M.dome) drawBorderLine2d(state.selected);
 }
@@ -672,8 +693,10 @@ function draw3d(){
     m.visible = vis;
     if (!vis) continue;
     const sel = o === state.selected;
-    m.material.color.set(sel ? 0xffffff : (o._css || "#5b6478"));
-    m.material.emissive.set(sel ? 0x444444 : 0x000000);
+    m.material.color.set(sel ? SEL_HEX : (o._css || "#5b6478"));
+    /* Emissive, not just bright: a lit surface keeps its shading and still
+       glows, where a white diffuse colour flattens into a pale blob. */
+    m.material.emissive.set(sel ? 0x8c0068 : 0x000000);
   }
   const mode = CLIP_MODES[state.clip] || CLIP_MODES.both;
   if (mode.normal){

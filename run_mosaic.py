@@ -45,6 +45,11 @@ def main(argv=None) -> int:
     g.add_argument("--diameter", type=float, default=40.0, help="pixels")
     g.add_argument("--min-diameter", type=float, default=8.0, help="pixels")
     g.add_argument("--max-diameter", type=float, default=160.0, help="pixels")
+    g.add_argument("--cellprob", type=float, default=None,
+                   help="Cellpose confidence threshold; lower finds fainter "
+                        "objects, too low merges neighbours (default -2.0)")
+    g.add_argument("--flow-threshold", type=float, default=None,
+                   help="how irregular a mask may be (default 0.6)")
     g.add_argument("--min-sharpness", type=float, default=0.25,
                    help="focus-peak prominence threshold (0-1)")
     g.add_argument("--no-gpu", action="store_true")
@@ -77,6 +82,10 @@ def main(argv=None) -> int:
                     min_diameter_px=a.min_diameter,
                     max_diameter_px=a.max_diameter,
                     fit_dome=False)
+    if a.cellprob is not None:
+        params.cellprob_threshold = a.cellprob
+    if a.flow_threshold is not None:
+        params.flow_threshold = a.flow_threshold
 
     overrides = {}
     if a.px_size is not None:

@@ -169,6 +169,24 @@ class Params:
     z_step: int = 1
     """Segment every Nth slice, for the per-slice path."""
 
+    cellprob_threshold: float = -2.0
+    """How confident Cellpose must be that a pixel belongs to a cell.
+
+    Lowering it below zero admits fainter objects and grows the masks it already
+    has. In a Matrigel dome the faint objects are the deep ones -- there is a
+    millimetre of gel above them -- so this is the knob that decides whether the
+    bottom of the droplet is measured or missed. It is also the knob that
+    invents objects if pushed too far, which is why it is chosen by sweeping it
+    and watching the fraction of outlines that enclose nothing."""
+
+    flow_threshold: float = 0.6
+    """How far a mask's flow field may depart from a well-formed cell before it
+    is rejected. Raising it keeps more irregular shapes, at the cost of keeping
+    more debris. Raised from the 0.4 default because organoids in a dome are not
+    all tidy spheres, and the outlines this admits are the ragged ones that
+    `shape_suspect` already marks, so they arrive labelled rather than
+    unnoticed."""
+
     # --- substrate / range ---
     substrate_margin_slices: int = 3
     """Detections at or below the glass plane are debris on the dish."""

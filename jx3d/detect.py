@@ -84,6 +84,8 @@ class CellposeDetector:
         self.p = params
         self.acq = acq
         self.diameter_px = params.expected_diameter_px
+        self.cellprob_threshold = params.cellprob_threshold
+        self.flow_threshold = params.flow_threshold
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             self.model = models.CellposeModel(gpu=gpu)
@@ -95,8 +97,8 @@ class CellposeDetector:
                 img,
                 diameter=self.diameter_px,
                 batch_size=2,          # 4 GB GPU
-                flow_threshold=0.4,
-                cellprob_threshold=0.0,
+                flow_threshold=self.flow_threshold,
+                cellprob_threshold=self.cellprob_threshold,
                 normalize=True,
             )
         return masks.astype(np.int32)

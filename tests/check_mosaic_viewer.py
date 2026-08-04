@@ -109,6 +109,19 @@ HARNESS = r"""
       select(target);
     }
     ok(state.selected === target, "selection state follows the click");
+    {
+      // A selection has to be findable on a crowded grey field. White is what
+      // saturated background and out-of-focus rims already are.
+      draw3d();
+      const m = meshes.get(target.uid);
+      ok(m.material.color.getHex() === SEL_HEX,
+         `the selected organoid takes the selection colour (#${m.material.color.getHexString()})`);
+      ok(m.material.emissive.getHex() !== 0,
+         "and emits light rather than merely being pale");
+      const others = [...meshes.values()].filter(x => x !== m && x.visible);
+      ok(others.every(x => x.material.emissive.getHex() === 0),
+         "while nothing else does");
+    }
 
     // --- the stack is a stack, and stepping through it changes the picture ---
     ok(NZ > 50, `${NZ} slices embedded, so depth can actually be stepped through`);
