@@ -26,6 +26,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from jx3d import blend as blendmod
 from jx3d import mosaic as mosaicmod
 from jx3d.keyence import read_group_metadata, read_tile_layout
 
@@ -61,6 +62,24 @@ def _correlation_peak(a: np.ndarray, b: np.ndarray) -> float:
     cross = fa * np.conj(fb)
     cross /= np.abs(cross) + 1e-12
     return float(np.fft.irfft2(cross, a.shape).max())
+
+
+def _seam_step(image: np.ndarray, m) -> float:
+    """Mean brightness step across the vertical tile boundaries in a composite.
+
+    A seam is a discontinuity, so it shows up as a jump between the column just
+    inside a tile's edge and the column just outside it. Comparing that jump to
+    the jump one would find at an arbitrary column is what separates a real seam
+    from ordinary specimen contrast.
+    """
+    steps = []
+    for t in m:
+        for x in (int(round(t.x0)), int(round(t.x0 + t.width))):
+            if 2 <= x < image.shape[1] - 2:
+                a = image[:, x - 2:x].mean(axis=1).astype(np.float32)
+                b = image[:, x:x + 2].mean(axis=1).astype(np.float32)
+                steps.append(np.abs(a - b).mean())
+    return float(np.mean(steps)) if steps else 0.0
 
 
 def run(dataset: Path) -> int:
@@ -140,6 +159,23 @@ def run(dataset: Path) -> int:
     ok(strips_ok == strips_total,
        f"{strips_ok}/{strips_total} neighbour pairs correlate as the grid places "
        f"them, and not as their mirror image")
+
+    # --- flat-fielding removes the fixed pattern, and blending hides the seams ---
+    print("\n  illumination and seams:")
+    flat = blendmod.estimate_flat_field(m)
+    ok(flat.span_after < 0.25 * flat.span_before,
+       f"flat-fielding flattens the illumination from {flat.span_before:.1f} to "
+       f"{flat.span_after:.1f} grey levels across a frame")
+    ok(0.5 < flat.gain.min() and flat.gain.max() < 2.0,
+       f"the correction stays gentle (gain {flat.gain.min():.2f} to "
+       f"{flat.gain.max():.2f}), so it cannot invent contrast")
+
+    z = min(89, blendmod.MosaicSlices(m, flat).depth - 1)
+    plain = blendmod.MosaicSlices(m, None, blend=False).slice(z)
+    fused = blendmod.MosaicSlices(m, flat, blend=True).slice(z)
+    ok(_seam_step(fused, m) < _seam_step(plain, m),
+       f"blending softens the seams: mean step across a tile edge falls from "
+       f"{_seam_step(plain, m):.2f} to {_seam_step(fused, m):.2f} grey levels")
 
     failed = sum(1 for good, _ in _RESULTS if not good)
     print(f"\n{len(_RESULTS) - failed} passed, {failed} failed")
