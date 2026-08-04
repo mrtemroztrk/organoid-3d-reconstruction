@@ -1,13 +1,21 @@
-"""Read acquisition geometry out of a Keyence BZ-X .gci group file.
+"""Read acquisition geometry out of a Keyence BZ-X dataset.
 
-A .gci is a plain zip of small properties.xml documents. We only need the
-Z-stack pitch and the objective, but the whole tree is dumped for reference.
+Two files carry it. The .gci group file is a plain zip of small properties.xml
+documents describing the whole acquisition -- objective, Z pitch, and, for a
+tiled scan, the shape of the tile grid and which image belongs in which cell.
+Each individual TIFF then carries its own copy of the state the stage was in
+when that frame was taken, hidden in a Keyence-private EXIF MakerNote.
+
+Everything here reads the instrument's own record. Where a value cannot be
+found the caller is told, so that a missing calibration or a missing tile map
+becomes a stated fact rather than a silent default.
 """
 from __future__ import annotations
 
 import re
 import struct
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 from .config import Acquisition
@@ -132,3 +140,220 @@ def read_group_metadata(stack_folder: str | Path, image_width: int = 960) -> tup
         info["working_distance_mm"] = wd
 
     return acq, info
+
+
+# --------------------------------------------------------------------------- #
+# Tiled ("image joint") acquisitions
+# --------------------------------------------------------------------------- #
+
+@dataclass(frozen=True)
+class TileLayout:
+    """Which captured stack belongs in which cell of a tiled scan.
+
+    `cells` maps a stack folder name such as ``4x_00007`` to its ``(row, col)``,
+    with row 0 at the top and column 0 at the left of the assembled mosaic.
+    """
+
+    n_rows: int
+    n_cols: int
+    cells: dict[str, tuple[int, int]]
+    source: str
+    """Where the layout came from: 'keyence-filelist' or 'keyence-imagejoint'."""
+
+    def name_at(self, row: int, col: int) -> str | None:
+        for name, rc in self.cells.items():
+            if rc == (row, col):
+                return name
+        return None
+
+    def describe(self) -> str:
+        lines = [f"{self.n_rows} x {self.n_cols} tiles ({self.source})"]
+        for r in range(self.n_rows):
+            lines.append("  " + "  ".join(
+                (self.name_at(r, c) or "--").rjust(9) for c in range(self.n_cols)))
+        return "\n".join(lines)
+
+
+def _read_7bit_length(buf: bytes, off: int) -> tuple[int, int]:
+    """Decode a .NET BinaryWriter length prefix; returns (length, new offset).
+
+    Lengths below 128 occupy a single byte, which is every case in practice
+    here, but the format is variable-width and reading only the first byte
+    would desynchronise the whole record stream on a longer name.
+    """
+    value = 0
+    shift = 0
+    while True:
+        b = buf[off]
+        off += 1
+        value |= (b & 0x7F) << shift
+        if not b & 0x80:
+            return value, off
+        shift += 7
+
+
+def _parse_file_list(blob: bytes) -> dict[str, tuple[int, int]]:
+    """Decode GroupFileProperty/ImageList/FileList into {stack name: (row, col)}.
+
+    The blob is a .NET-serialised record array: a 32-bit count, then one record
+    per captured image holding the channel name, four 32-bit indices, the file
+    name, and a double. Only the third and fourth indices are needed; they are
+    the tile's row and column.
+
+    That reading is not inferred from the field order alone. It reproduces both
+    the operator's own sketch of the scan and, independently, the ordering of
+    the per-image stage coordinates: the tile the file list calls column 1 is
+    the tile whose stage X lies between the other two.
+    """
+    n_records = struct.unpack_from("<I", blob, 0)[0]
+    off = 4
+    cells: dict[str, tuple[int, int]] = {}
+    for _ in range(n_records):
+        length, off = _read_7bit_length(blob, off)
+        off += length                                   # channel name
+        _, _, row, col = struct.unpack_from("<4i", blob, off)
+        off += 16
+        length, off = _read_7bit_length(blob, off)
+        name = blob[off:off + length].decode("utf-8", "replace")
+        off += length + 8                               # name, then the double
+        cells.setdefault(name.split("_Z")[0], (int(row), int(col)))
+    return cells
+
+
+def read_tile_layout(folder: str | Path) -> tuple[TileLayout | None, dict]:
+    """The tile grid of a stitched acquisition, or None if it was not tiled.
+
+    `folder` may be the dataset directory or any stack folder inside it.
+    """
+    info: dict = {}
+    gci = _find_gci(Path(folder))
+    if gci is None:
+        info["warning"] = "no .gci found - the tile layout is unknown"
+        return None, info
+    info["source"] = str(gci)
+
+    with zipfile.ZipFile(gci) as zf:
+        def read(name: str) -> bytes:
+            try:
+                return zf.read(name)
+            except KeyError:
+                return b""
+
+        joint = read("GroupFileProperty/ImageJoint/properties.xml").decode(
+            "utf-8", "replace")
+        file_list = read("GroupFileProperty/ImageList/FileList")
+
+    if not joint or (_xml_value(joint, "Enabled") or "").strip() != "True":
+        info["warning"] = "the .gci does not describe a tiled acquisition"
+        return None, info
+
+    rows = _xml_value(joint, "Row")
+    cols = _xml_value(joint, "Column")
+    if rows is None or cols is None:
+        info["warning"] = "ImageJoint carries no Row/Column"
+        return None, info
+    n_rows, n_cols = int(rows), int(cols)
+    info["image_joint_rows"] = n_rows
+    info["image_joint_columns"] = n_cols
+    info["stitching_type"] = _xml_value(joint, "OperationType")
+
+    if not file_list:
+        info["warning"] = ("ImageJoint declares the grid shape but the file "
+                           "list is missing, so which stack sits in which cell "
+                           "is unknown")
+        return None, info
+
+    cells = _parse_file_list(file_list)
+    if len(cells) != n_rows * n_cols:
+        info["warning"] = (f"the file list names {len(cells)} stacks but the "
+                           f"grid is {n_rows}x{n_cols}")
+    return TileLayout(n_rows, n_cols, cells, "keyence-filelist"), info
+
+
+# --------------------------------------------------------------------------- #
+# Per-image stage position
+# --------------------------------------------------------------------------- #
+
+_MAKERNOTE_XML_TAG = 0x0800
+"""MakerNote entry holding a UTF-8 properties document for that single frame."""
+
+
+def _makernote_xml(path: Path) -> str | None:
+    """The per-frame properties XML embedded in one TIFF, if it is there.
+
+    The MakerNote is a little-endian TIFF IFD of its own, but its value offsets
+    are relative to the start of the *file*, not to the note. Resolving them
+    against the note would read whatever happens to lie at that offset inside
+    it, which is why the file is reopened here rather than the note alone being
+    parsed.
+    """
+    import tifffile as tiff
+
+    with tiff.TiffFile(path) as tf:
+        exif = tf.pages[0].tags.get("ExifTag")
+        note = (exif.value or {}).get("MakerNote") if exif is not None else None
+    if not note or not note.startswith(b"KmsFile"):
+        return None
+
+    (n_entries,) = struct.unpack_from("<H", note, 8)
+    for i in range(n_entries):
+        base = 10 + i * 12
+        tag, _, count = struct.unpack_from("<HHI", note, base)
+        if tag != _MAKERNOTE_XML_TAG:
+            continue
+        (offset,) = struct.unpack_from("<I", note, base + 8)
+        with open(path, "rb") as fh:
+            fh.seek(offset)
+            blob = fh.read(count)
+        start = blob.find(b"<?xml")
+        if start < 0:
+            return None
+        return blob[start:].decode("utf-8", "replace")
+    return None
+
+
+def read_stage_location(tif_path: str | Path) -> tuple[int, int, int] | None:
+    """Stage position when this frame was captured, as (X, Y, Z) nanometres.
+
+    This is the only place the relative position of one tile to another is
+    recorded, and it is recorded per frame rather than per stack, so it is read
+    from an image rather than from the group file.
+    """
+    xml = _makernote_xml(Path(tif_path))
+    if xml is None:
+        return None
+    got = []
+    for axis in ("X", "Y", "Z"):
+        raw = _xml_value(xml, f"StageLocation{axis}")
+        if raw is None:
+            return None
+        got.append(int(raw))
+    return tuple(got)                                    # type: ignore[return-value]
+
+
+def read_edge_points(folder: str | Path) -> list[tuple[int, int, int]]:
+    """Stage points the operator clicked to outline the region to scan.
+
+    A "specify edge points" scan is set up by driving the stage to a few places
+    on the rim of the specimen; the instrument then covers their bounding
+    region with tiles. Those clicks are an independent, human-supplied estimate
+    of where the droplet ends, which is worth having as a check on a fitted
+    dome that was derived from the pixels alone.
+
+    Unused slots are stored as all-zero and are dropped here.
+    """
+    gci = _find_gci(Path(folder))
+    if gci is None:
+        return []
+    points: list[tuple[int, int, int]] = []
+    with zipfile.ZipFile(gci) as zf:
+        names = set(zf.namelist())
+        for i in range(32):
+            name = f"GroupFileProperty/ImageJoint/EdgePoint{i}/properties.xml"
+            if name not in names:
+                break
+            xml = zf.read(name).decode("utf-8", "replace")
+            xyz = tuple(int(_xml_value(xml, a) or 0) for a in ("X", "Y", "Z"))
+            if any(xyz):
+                points.append(xyz)                       # type: ignore[arg-type]
+    return points

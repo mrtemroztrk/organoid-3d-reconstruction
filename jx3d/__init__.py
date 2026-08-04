@@ -9,11 +9,17 @@ Pipeline shape (see `pipeline.run`):
 The design constraint that drives all of it: a 4x / NA 0.20 brightfield stack is
 not an optical section. Depth comes from *where the rim is sharpest*, not from
 where there is signal.
+
+A specimen larger than one field is captured as a grid of overlapping stacks.
+`mosaic` places those tiles in one shared frame so that the whole droplet can be
+measured as a single object rather than as fifteen unrelated views of it.
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 from .config import Acquisition, Params
+from .mosaic import Mosaic, Tile
 from .stack import ZStack, load_stack
 
-__all__ = ["Acquisition", "Params", "ZStack", "load_stack", "__version__"]
+__all__ = ["Acquisition", "Params", "Mosaic", "Tile", "ZStack", "load_stack",
+           "__version__"]
