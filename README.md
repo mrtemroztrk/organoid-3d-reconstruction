@@ -4,6 +4,11 @@ Measure organoids grown in a Matrigel dome from an ordinary **brightfield**
 Z-stack — the kind a Keyence BZ-X produces by stepping the focus down through
 the sample. No confocal, no fluorescence, no optical sectioning.
 
+A dome is wider than one field of view, so it is captured as a grid of
+overlapping stacks. JX-3D assembles those into a single frame and measures the
+droplet as one object: [**the whole dome**](#the-whole-dome) covers that. For a
+single field, everything below it still applies unchanged.
+
 Output is a per-object feature matrix, a 3D mesh, and a single-file interactive
 viewer that shows the reconstruction **on top of the raw photograph** so every
 number can be checked by eye.
@@ -11,6 +16,12 @@ number can be checked by eye.
 Measurements are reported in **pixels and slice indices**. Micrometres are added
 only when a real calibration was recovered, and every calibrated value carries
 the source it came from — see [Units](#units).
+
+![mosaic](docs/mosaic.png)
+
+*One Matrigel droplet, 8 mm across, assembled from fifteen overlapping
+brightfield Z-stacks. 844 organoids, each counted once and measured in a single
+coordinate frame.*
 
 ![slicer](docs/slicer.gif)
 
@@ -216,6 +227,196 @@ default `--mode both` takes the union of the two and deduplicates.
 
 ---
 
+## The whole dome
+
+A Matrigel droplet is about 8 mm across and a 4x field is 3.6 mm, so no single
+photograph contains the specimen. The microscope captures it as a grid of
+overlapping Z-stacks — here 5 rows × 3 columns, 15 stacks of 119 slices — and
+until those are placed in one coordinate frame there is no such thing as "this
+organoid's distance to the edge of the dome", because the edge is in a different
+file from the organoid.
+
+```bash
+./.venv/bin/python run_mosaic.py BK52_WT_9805_B
+```
+
+![mosaic assembly](docs/mosaic_assembly.gif)
+
+*The fifteen fields arriving in the order the stage visited them. The numbering
+snakes along each row — 1‑2‑3, then 6‑5‑4, then 7‑8‑9 — which is the scan
+pattern the group file records, not a convention chosen here.*
+
+### Where the tiles go, and how we know
+
+Nothing about the layout is declared in this code. The Keyence `.gci` states the
+grid shape (`Row=5, Column=3`), its image list gives every stack its row and
+column, and each TIFF carries the stage position it was taken at in a private
+EXIF note. Offsets come from those positions, so an irregular scan would stay
+irregular.
+
+That gets the tiles roughly right and not exactly right. Correlating the
+overlapping strips moves them by **up to 31 px — about 120 µm, three small
+organoids** — which is more than enough to make one organoid look like two. The
+fifteen positions are solved for at once against all twenty-two neighbour pairs
+rather than chained from tile to tile, and the pairs then agree with each other
+to **0.06 px**. That number is the warrant for trusting the assembled frame, and
+the run refuses to proceed quietly without it.
+
+Checking the geometry against the metadata would prove nothing, because the
+group file and the stage log share a convention and would agree with each other
+even if both were mirrored. So `tests/check_mosaic.py` asks the pixels instead:
+overlapping tiles show the same specimen twice, and the placement has to beat its
+own mirror image. It does, on all 22 pairs, by 3× to 26×.
+
+One thing falls out of this that was not being looked for. The stage steps a
+known distance and the images say how many pixels that was, so the mosaic
+**measures the pixel size independently**: 3.7270 µm/px from the columns and
+3.7263 from the rows, agreeing with each other to 0.02 % and with the
+instrument's own calibration to 1.26 %. Two axes agreeing that closely means a
+single scale factor rather than distortion. The test reports the disagreement
+and does not resolve it — which of the two is right is not something the images
+can settle.
+
+### Illumination has to go first
+
+Averaging all fifteen frames at one depth cancels the specimen and leaves the
+optics. What is left is not a vignette but a smooth tilt of about **60 grey
+levels** from one corner of the frame to the other, identical in every tile.
+
+That matters more than it sounds. An organoid in an overlap zone lands at a
+*different place in the frame* in each of the two tiles that see it, so without
+correction the same object has two brightnesses and two textures depending on
+which tile is asked. Since the feature matrix exists to measure appearance, this
+is corrected before anything is measured: a per-pixel median over a hundred
+frames, smoothed to the scale illumination actually varies on. It takes the
+spread within a frame from 59 grey levels to **7.8**.
+
+What is deliberately *not* removed is the difference in mean level between
+tiles, which is nearly as large. That is specimen — the centre of the droplet is
+dimmer because there is more gel to see through — and flattening it away would
+delete signal.
+
+### The glass is one plane, and two tiles cannot see it
+
+Every tile was captured at the same stage Z, so the well bottom is physically one
+plane with one right answer. Asking each tile separately does not give fifteen
+noisy estimates of it; it gives thirteen good ones and two that are wrong.
+`4x_00005` and `4x_00008` sit over the thickest gel, where the glass reflection
+never becomes the sharpest thing in the field, and their focus profiles have no
+peak worth the name — contrast 1.08 and 1.16 against 2.0 and up everywhere else.
+
+Left to themselves they place the glass thirty slices too high and truncate
+their own analysis through the densest part of the droplet. Supplying the
+consensus plane instead takes `4x_00005` from **65 organoids to 128**. The
+instrument's own recorded per-image focus score, which costs nothing and touches
+no pixels, peaks at the same slice — an independent confirmation of the
+consensus.
+
+### The droplet, fitted to the droplet
+
+![dome rings](docs/dome_rings.gif)
+
+*The gel/medium interface crossing each focal plane. It widens as the focus
+descends, tracing the cross-section of a spherical cap — which is a figure only
+the mosaic can produce, because in a single field the interface is a short arc
+crossing one corner and nothing about it looks like a circle that grows.*
+
+One field spans about a tenth of this dome, so fitting a 4 mm radius to it means
+extrapolating from a short arc. That was not merely imprecise — it was biased.
+The three per-field fits give contact radii of 932, 982 and 1020 px where the
+whole mosaic gives **1066**, all three low, each quoting a bootstrap spread of a
+quarter of a percent. The error bar was twenty times too small and pointed the
+wrong way, and averaging fifteen such fits would have preserved the bias while
+making the confidence look better.
+
+Across fifteen tiles the entire footprint is inside the frame, so every azimuth
+returns a rim and the contact circle stops being an extrapolation. Each slice
+fits its own circle, which makes the axis a measurement with a real error bar —
+sixteen slices agree on it to **2.6 px**, and unlike a bootstrap that comes from
+genuinely separate observations. The cap then follows in closed form, because
+r² + z² is linear in z for a sphere, and it explains the measured radii to
+**3.0 px rms out of a 1226 px radius**.
+
+The droplet: **8.0 mm across, 2.3 mm tall, 66 µl** — a volume someone could have
+pipetted.
+
+> **A check that had to be thrown away.** The `.gci` records four stage points
+> the operator drove to when setting the scan up, and it is tempting to read them
+> as their opinion of where the droplet ends. They are not. They sit a
+> millimetre inside the fitted rim, their stage Z is the depth of slice 60 rather
+> than of the glass, and the first tile centre lands 0.4 px from the first of
+> them while the last overshoots by exactly the slack from rounding 1.97 columns
+> up to 3 and 3.17 rows up to 5. They are the requested scan bounds. The test
+> now asserts that they are *not* rim points, because using them would have been
+> a confident, wrong validation.
+
+### Counting each organoid once
+
+Nearly half the mosaic is seen by more than one tile — 51 % of the canvas by
+exactly one, 41 % by two and 8 % by four — so an organoid in an overlap is
+detected twice, or at a corner up to four times.
+
+Detection runs on each tile's own pixels and merging happens afterwards in mosaic
+coordinates. The alternative, blending the tiles into one image and segmenting
+that, fails on exactly what this project is for: a blend gives an organoid pixels
+no camera recorded, weighted differently across the object, and a measurement
+made on a blended pixel cannot be checked against a raw image because there is
+none it came from.
+
+Sightings are matched by an optimal one-to-one assignment per seam, gated on
+lateral distance, depth and radius agreement. The axial gate is one depth of
+field and no more — two organoids at the same (x, y) and different depths are an
+ordinary configuration in a droplet a millimetre deep, and a loose gate would
+fuse them and delete a real object.
+
+When several views survive, **one is elected rather than averaged**. Averaging
+two outlines produces a shape neither camera saw. The unelected views are kept in
+`views.csv` instead of discarded, which turns the overlap into something better
+than a nuisance: the same organoid measured twice, independently, is a free
+repeatability estimate for every feature — an error bar a single field cannot
+produce.
+
+Clipping is detected geometrically, from how far an outline reaches towards its
+frame edge, and never from shape. A disc cut clean in half still scores 0.72 for
+circularity and sails through the 0.55 shape filter, so a shape test cannot see
+clipping at all; it only sees a slightly rounder object.
+
+On this dataset: **1306 sightings become 844 organoids**, so 35 % of raw
+detections were repeats. Where two tiles agreed an object was there, they placed
+it to a median of **0.39 px laterally and 0.58 slices in depth** — well inside
+the 4 px and 3.3-slice gates, which is why the gates are not a sensitive knob.
+348 organoids were seen by more than one tile and carry a second, independent
+measurement of themselves.
+
+Two numbers are reported rather than quietly fixed. 188 organoids sit in a
+doubly-covered region but were found by only one of the two tiles; the other
+tile's segmenter missing something does not make it unreal, so they are kept and
+flagged. And the seam between the two central fields matched only a third of its
+detections while placing those matches to half a pixel — the tiles are in the
+right place, and the segmenter simply found different objects on either side of
+it, which is what happens under the thickest gel. Reporting a low match rate as
+a geometry failure would have been the wrong alarm.
+
+The physical check that matters passes: **100 % of the organoids fall inside the
+fitted droplet.** They grow in the gel, so anything else would have meant the
+surface was wrong.
+
+### Distance to the edge of the dome
+
+![border distance](docs/border_distance.png)
+
+*Each line runs from an organoid's surface to the nearest point on the gel
+boundary — the quantity the feature matrix reports as `nearest_border_px`. In
+the viewer it is a toggle.*
+
+The clearance is measured from the organoid's **surface**, not its centre, so
+zero means touching the boundary. Both boundaries are considered: the curved cap
+above, and the circle where the gel meets the glass. For an organoid sitting low
+and near the rim the contact circle is the closer one, and reporting only the cap
+would overstate how sheltered it is.
+
+---
+
 ## The Matrigel dome
 
 Organoids grow inside a droplet of gel sitting on the well bottom, and how far
@@ -315,6 +516,17 @@ python -m venv .venv
 
 ## Run
 
+### Whole dome
+
+```bash
+./.venv/bin/python run_mosaic.py BK52_WT_9805_B
+```
+
+About two minutes on a GTX 1650 Ti for fifteen fields in `--mode edf`, and the
+per-field results are cached, so re-running to change only the feature
+extraction does not re-segment anything. Peak memory is one tile at a time
+(~90 MB); the assembled volume would be 750 million voxels and is never held.
+
 ### Control panel
 
 ```bash
@@ -370,6 +582,19 @@ group file next to it — that is where the calibration is read from.
 
 ## Output
 
+A whole-dome run (`run_mosaic.py`) writes:
+
+| file | what |
+|---|---|
+| `features.csv` | **the feature matrix** — one row per organoid, 139 columns |
+| `views.csv` | every sighting, including the ones not elected; a repeat measurement of the same organoid is an error bar, not a discard |
+| `viewer.html` | **single file**, ~15 MB: all fifteen fields, switchable, with the feature table |
+| `mosaic.json` | tile geometry, registration residuals, dome fit, merge report, provenance |
+| `tiles.json` | where each tile sits and where that placement came from |
+| `tiles/<name>/` | each field's own measurement, exactly as the single-field pipeline writes it |
+
+A single-field run (`run.py`) writes:
+
 | file | what |
 |---|---|
 | `viewer.html` | **single file**, double-click to open: raw image, interactive 3D, slicer, measurements |
@@ -389,7 +614,56 @@ Still renders without a browser:
 ./.venv/bin/python render_3d.py output/4x_00009
 ```
 
-### Feature matrix (`organoids.csv`)
+### Whole-dome feature matrix (`features.csv`)
+
+844 organoids × 139 columns on this dataset. The blocks, and what each is for:
+
+| block | columns | what it carries |
+|---|---|---|
+| identity | `uid`, `tile`, `tile_row/col`, `views`, `n_views`, `coverage_k` | which field each measurement came from, and how many saw it |
+| flags | `clipped`, `clipped_everywhere`, `single_view_in_overlap`, `radius_disagreement`, `guarantee_void` | when a row should be distrusted, and why |
+| position | `x/y_mosaic_px`, `z_slice`, `dome_radial_px`, `dome_azimuth_deg`, `height_above_glass_slices` | where in the droplet, in one shared frame |
+| dome border | `nearest_border_px`, `dome_distance_px`, `contact_edge_distance_px`, `nearest_border_is_cap` | clearance from the organoid's **surface** to the gel boundary |
+| size | `diameter_px`, `area_px2`, `volume_voxels`, `radius_z_slices` | measured laterally; the axial extent is **modelled** |
+| shape | `circularity`, `solidity`, `convexity`, `radius_cv`, `harmonic_1..6` | rotation-invariant outline descriptors from r(θ) |
+| core vs rim | `rim_minus_core_od`, `core_rim_separation`, `core_fill_fraction`, `core_od_*`, `rim_od_*` | **the viability construct** |
+| texture | `core_glcm_*` (5 properties × 3 distances), `core_lbp_*`, `core_grad_mean` | granularity of the lumen |
+| focus | `focus_sharpness`, `n_slices`, `best_slice` | how convincingly the rim came into focus |
+| neighbours | `nn_distance_px`, `nn_gap_px`, `n_within_5r` | local crowding |
+| quality | `appearance_measurable`, `background_dn`, `background_tilt_frac`, `background_clipped_frac` | whether the appearance block can be believed at all |
+
+**No raw intensity is reported.** Brightfield is illumination × transmittance, so
+every intensity column is an optical density measured against a background
+estimated from a ring around *that* organoid. Otherwise a model would learn
+which tile a row came from — the illumination varies 60 grey levels across a
+frame and 90 between tiles, and the same organoid in an overlap falls at
+different places in the two frames that see it.
+
+**Core versus rim is the biologically motivated feature.** A live cystic organoid
+is a fluid-filled sphere: a thin refractile shell around an optically empty
+lumen, so its centre is bright and smooth and its rim is a dark ring. As it dies
+the lumen fills with debris, the centre darkens and goes granular, and the
+contrast collapses. `rim_minus_core_od` measures exactly that difference, and on
+this dataset it is genuinely two-sided — 45 % of organoids have a denser rim than
+core — rather than a constant sign.
+
+> The measurement band lies **inside** the outline, not straddling it. A band
+> centred on the boundary is half background, and background is the brightest
+> thing in a transmitted-light image, so it dragged rim density towards zero and
+> made every organoid look denser in the middle than at the edge. That was an
+> artefact of where the band was drawn, not a property of the organoids.
+
+`background_clipped_frac` deserves attention. The transmitted-light background
+saturates at 255 over much of this dataset — it is the *mode* in nine of the
+fifteen tiles — so where it clips the background level is a lower bound rather
+than a measurement, and any density derived from it should be read with that
+column beside it.
+
+Columns whose value depends on the near-spherical assumption rather than on
+anything the microscope recorded are named so that this is visible without
+reading the documentation.
+
+### Single-field feature matrix (`organoids.csv`)
 
 One row per object. Pixel and slice columns are always present; the micrometre
 block is appended only when the stack is calibrated.
@@ -417,7 +691,34 @@ in pixels, sampled at uniform angles from the object centre.
 
 ---
 
-## Using the viewer
+## Using the whole-dome viewer
+
+Photograph on the left, 3D on the right, and a 5×3 map of the acquisition on the
+side — the same grid the fields were captured on, so the control mirrors the
+specimen rather than an arbitrary list.
+
+![fov toggle](docs/fov_toggle.gif)
+
+*Click a cell to toggle that field, shift-click for it alone. Both panes follow:
+switched-off fields dim in the photograph and their organoids disappear from the
+3D scene.*
+
+Because the sightings were merged, an organoid seen by two fields is **one**
+organoid with one row, and switching on both of its fields does not draw it
+twice. The `views` column names every field that saw it.
+
+Clicking any organoid, in either pane, fills the feature table with all 139
+columns grouped by block, with the quality flags at the top. **Border line**
+draws the shortest path from that organoid's surface to the gel boundary, in
+both panes.
+
+The whole thing is a single file with no server and no network access. Every
+slice of every field would have been 222 MB of base64, so the budget goes on the
+all-in-focus projections instead — one per field plus the assembled mosaic,
+which is the image you actually want when looking at a field and asking what is
+in it. A coarse mosaic stack is kept for scrubbing through depth.
+
+## Using the single-field viewer
 
 Three panes: raw microscope image, interactive 3D, measurements. The Z slider at
 the bottom keeps them in sync.
@@ -525,23 +826,54 @@ the picture.
 
 ```
 jx3d/
-  config.py       acquisition geometry (µm/px, µm/slice) and analysis parameters
-  keyence.py      .gci metadata parsing
-  stack.py        Z-stack loading
-  focus.py        focus measures, substrate detection, focal-plane finding
-  edf.py          all-in-focus projection + depth map
-  detect.py       per-slice 2D segmentation (Cellpose-SAM / classical)
-  link.py         Z linking of per-slice detections
-  reconstruct.py  focal-plane measurement, spheroid meshing
-  qc.py           quality-control figures
-  viewer.py       self-contained HTML viewer
+  config.py         acquisition geometry (µm/px, µm/slice) and analysis parameters
+  keyence.py        .gci metadata: calibration, tile layout, per-frame stage position
+  stack.py          Z-stack loading
+  focus.py          focus measures, substrate detection, focal-plane finding
+  edf.py            all-in-focus projection + depth map
+  detect.py         per-slice 2D segmentation (Cellpose-SAM / classical)
+  link.py           Z linking of per-slice detections
+  reconstruct.py    focal-plane measurement, spheroid meshing
+  dome.py           spherical-cap fit for one field
+  qc.py             quality-control figures
+  viewer.py         self-contained HTML viewer (single field)
   viewer_template.html
-run.py             CLI
-serve.py           browser control panel
-render_3d.py       offline renders
-make_docs_media.py figures for this README
-tests/check_viewer.py  browser-driven check of the generated viewer
+  --- whole dome ---
+  mosaic.py         where each tile sits, and the provenance of that placement
+  register.py       refining the offsets against the overlapping pixels
+  blend.py          flat-field estimation; composited slices, for display only
+  dome_global.py    one droplet fitted across all fifteen fields
+  dedup.py          fifteen lists of sightings into one catalogue of organoids
+  features.py       appearance: regions, optical density, shape, texture, space
+  mosaic_pipeline.py  the staged run
+  viewer_mosaic.py  the fifteen-field viewer
+  mosaic_viewer.html
+run.py               CLI, one field
+run_mosaic.py        CLI, whole dome
+serve.py             browser control panel
+render_3d.py         offline renders
+make_docs_media.py   single-field figures for this README
+make_mosaic_media.py whole-dome figures for this README
+tests/check_viewer.py         browser check of the single-field viewer
+tests/check_mosaic_viewer.py  browser check of the whole-dome viewer
+tests/check_mosaic.py         tile geometry, against the pixels
+tests/check_dome.py           the global dome fit
 ```
+
+### Checking a whole-dome run
+
+```bash
+./.venv/bin/python tests/check_mosaic.py BK52_WT_9805_B
+./.venv/bin/python tests/check_dome.py BK52_WT_9805_B
+./.venv/bin/python tests/check_mosaic_viewer.py \
+    output/BK52_WT_9805_B_mosaic/viewer.html
+```
+
+Each prints one `PASS`/`FAIL` line per claim and exits non-zero on any failure.
+The checks that matter most are the ones that leave the metadata behind and ask
+the pixels: that the tile placement beats its own mirror image, that the fitted
+rim tracks the texture ridge in the raw image, and that switching a field off in
+the viewer actually removes its organoids from both panes.
 
 ## License
 

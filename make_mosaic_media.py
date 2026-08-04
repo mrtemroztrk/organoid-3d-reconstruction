@@ -107,7 +107,7 @@ def assembly_gif(mosaic, slices, docs, z, width=760):
                 [cv2.IMWRITE_PNG_COMPRESSION, 9])
 
 
-def dome_gif(mosaic, slices, meta, docs, width=760, n=26):
+def dome_gif(mosaic, slices, meta, docs, width=560, n=20):
     """The droplet's cross-section widening as the focus descends.
 
     This is the whole basis of the dome fit, and it is a figure only the mosaic
@@ -138,8 +138,12 @@ def dome_gif(mosaic, slices, meta, docs, width=760, n=26):
                    f"{2 * r['radius_px'] * px_um / 1000:.2f} mm across",
               "faint ring = where the gel meets the glass, the widest it ever gets")
         frames.append(cv2.cvtColor(vis, cv2.COLOR_BGR2RGB))
-    frames = frames + frames[::-1]
-    save_gif(docs / "dome_rings.gif", frames, 130)
+    # Down and back up, so the widening reads as a sweep rather than a jump cut.
+    # The palette is deliberately small: this frame is a grey photograph with
+    # two coloured circles on it, and spending colours on the photograph's
+    # gradient costs megabytes without showing anything.
+    frames = frames + frames[-2:0:-1]
+    save_gif(docs / "dome_rings.gif", frames, 150, palettesize=64)
 
 
 def fov_gif(mosaic, slices, rows, docs, z, width=760):
