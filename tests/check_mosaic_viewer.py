@@ -88,6 +88,74 @@ HARNESS = r"""
     ok(/core|rim|circularity/.test(body), "the table carries appearance features");
     ok(state.selected === target, "selection state follows the click");
 
+    // --- the stack is a stack, and stepping through it changes the picture ---
+    ok(NZ > 50, `${NZ} slices embedded, so depth can actually be stepped through`);
+    ok(state.mode === "slice", "the viewer opens on the raw stack, not the projection");
+    const z0 = state.z;
+    const img0 = currentPhoto().img;
+    setZ(z0 + 10);
+    ok(state.z === z0 + 10 && +document.getElementById("zslider").value === z0 + 10,
+       "the slider follows setZ");
+    ok(currentPhoto().img !== img0, "a different slice shows a different photograph");
+    ok(dirty2 === true, "changing slice asks the photo pane to repaint");
+
+    // --- and the 3D plane and clip follow it ---
+    draw3d();
+    const pz = planeMesh.position.z, cc = clipPlane.constant;
+    setZ(z0 + 30); draw3d();
+    ok(Math.abs(planeMesh.position.z - pz) > 1,
+       `the photo plane moved with the slice (${pz.toFixed(0)} -> ${planeMesh.position.z.toFixed(0)})`);
+    ok(Math.abs(clipPlane.constant - cc) > 1, "the clip plane moved with it too");
+    ok(Math.abs(planeMesh.position.z - ZW(state.z)) < 1e-6,
+       "the plane sits at exactly the current slice's depth");
+    setZ(z0);
+
+    // --- outlines are the measured shape, not a stand-in circle ---
+    const withOutline = ORG.filter(o => o.radial_profile_px && o.radial_profile_px.length);
+    ok(withOutline.length > ORG.length * 0.9,
+       `${withOutline.length}/${ORG.length} organoids carry their measured r(theta) outline`);
+    const poly = outlineOf(withOutline[0]);
+    ok(poly && poly.length >= 24, `an outline is a real polygon (${poly.length/2} vertices)`);
+    const rr = withOutline[0].radial_profile_px;
+    ok(Math.max(...rr) !== Math.min(...rr),
+       "the outline is not a circle -- the radii vary, as a measured shape does");
+
+    // --- the dome is built where the fit says it is ---
+    if (M.dome && domeGroup){
+      const p = domeGroup.children[0].geometry.attributes.position.array;
+      let zmin = 1e9, zmax = -1e9;
+      for (let i = 2; i < p.length; i += 3){ zmin = Math.min(zmin, p[i]); zmax = Math.max(zmax, p[i]); }
+      const apexW = ZW(M.dome.apex_slice), glassW = ZW(M.substrate_slice);
+      ok(Math.abs(zmin - apexW) < 2,
+         `the cap's shallowest point is the fitted apex (${zmin.toFixed(0)} vs ${apexW.toFixed(0)})`);
+      ok(Math.abs(zmax - glassW) < 2,
+         `and its deepest is the glass (${zmax.toFixed(0)} vs ${glassW.toFixed(0)})`);
+      ok(zmax > zmin, "the cap opens downward, towards the glass");
+      // every vertex must lie on the fitted sphere, or it is not that dome
+      let worst = 0;
+      for (let i = 0; i < p.length; i += 3){
+        const d = Math.hypot(p[i]-M.dome.cx_px, p[i+1]-M.dome.cy_px, p[i+2]-ZW(M.dome.cz_slice));
+        worst = Math.max(worst, Math.abs(d - M.dome.radius_px));
+      }
+      ok(worst < 1.0, `every cap vertex lies on the fitted sphere (worst ${worst.toFixed(2)} px)`);
+    }
+
+    // --- navigation: orbit and pan are different things ---
+    const t0 = [cam.tx, cam.ty, cam.tz], az0 = cam.az;
+    panCamera(60, 40); placeCamera();
+    const moved = Math.hypot(cam.tx-t0[0], cam.ty-t0[1], cam.tz-t0[2]);
+    ok(moved > 1, `panning moves the target (${moved.toFixed(0)} units)`);
+    ok(cam.az === az0, "panning does not rotate");
+    Object.assign(cam, HOME);
+    cam.el = 99; placeCamera();
+    ok(cam.el < Math.PI/2, `elevation is clamped short of the pole (${cam.el.toFixed(2)} rad)`);
+    Object.assign(cam, HOME); placeCamera();
+
+    // --- field borders can be turned off ---
+    state.borders = false; dirty2 = true; draw2d();
+    ok(state.borders === false, "field borders can be switched off");
+    state.borders = true; draw2d();
+
     // --- the dome border line ---
     if (M.dome) {
       state.showLine = true; dirty3 = true; draw3d();

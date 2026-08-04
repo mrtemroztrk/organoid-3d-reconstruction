@@ -588,7 +588,7 @@ A whole-dome run (`run_mosaic.py`) writes:
 |---|---|
 | `features.csv` | **the feature matrix** — one row per organoid, 139 columns |
 | `views.csv` | every sighting, including the ones not elected; a repeat measurement of the same organoid is an error bar, not a discard |
-| `viewer.html` | **single file**, ~15 MB: all fifteen fields, switchable, with the feature table |
+| `viewer.html` | **single file**, ~22 MB: the whole stack, all fifteen fields switchable, with the feature table |
 | `mosaic.json` | tile geometry, registration residuals, dome fit, merge report, provenance |
 | `tiles.json` | where each tile sits and where that placement came from |
 | `tiles/<name>/` | each field's own measurement, exactly as the single-field pipeline writes it |
@@ -707,16 +707,48 @@ Because the sightings were merged, an organoid seen by two fields is **one**
 organoid with one row, and switching on both of its fields does not draw it
 twice. The `views` column names every field that saw it.
 
+### Stepping through depth
+
+The viewer opens on the **raw stack**, not on a projection, and the slider steps
+one slice at a time — arrow keys, the ◀ ▶ buttons, or Play. Both panes move
+together: the photograph changes, the plane floating inside the 3D volume moves
+to that depth, and the reconstruction is clipped at it, so the models are cut
+where the photograph cuts them.
+
+That matters more than convenience. A Z-stack whose depth you cannot step
+through is not a Z-stack, and depth is the one thing this modality measures.
+Watching each organoid sharpen at its own plane and blur again *is* the evidence
+that the depths in the feature matrix are real.
+
+Outlines drawn on the photograph are the **measured r(θ) contour**, not a
+stand-in circle, and organoids whose focal plane lies within the depth window of
+the current slice are drawn solid while the rest stay faint — so the
+superposition says which organoids this particular photograph is evidence for.
+The outline strength, the fill, and the depth window are all adjustable, and
+**All depths** turns the distinction off.
+
+Switch to **All-in-focus** for the projection instead: the sharpest pixel over
+depth, every organoid crisp at once. Select a single field and you get that
+field's own projection.
+
+Field borders and field numbers are toggles, and off by default for the numbers.
+
 Clicking any organoid, in either pane, fills the feature table with all 139
 columns grouped by block, with the quality flags at the top. **Border line**
 draws the shortest path from that organoid's surface to the gel boundary, in
-both panes.
+both panes. The dome is drawn as a translucent cap with latitude rings — the
+same cross-sections the fit was made from — plus the contact circle at the
+glass.
 
-The whole thing is a single file with no server and no network access. Every
-slice of every field would have been 222 MB of base64, so the budget goes on the
-all-in-focus projections instead — one per field plus the assembled mosaic,
-which is the image you actually want when looking at a field and asking what is
-in it. A coarse mosaic stack is kept for scrubbing through depth.
+**Navigation.** Left-drag orbits, right-drag or shift-drag pans, the wheel
+zooms; `R` resets and `T` looks straight down. Elevation stops just short of
+vertical, because at the pole the view direction is parallel to the up vector
+and the scene snaps to an arbitrary roll.
+
+The whole thing is a single file with no server and no network access, about
+22 MB. Every slice of every field would have been 222 MB, so what is embedded is
+the assembled mosaic stack — all 91 analysed slices, flat-fielded, at 850 px —
+plus the sixteen projections.
 
 ## Using the single-field viewer
 

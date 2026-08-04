@@ -1,21 +1,22 @@
 """Build the whole-dome viewer: one file, fifteen switchable fields, one 3D scene.
 
-The single-field viewer inlines every raw slice as a JPEG. That costs about
-sixteen megabytes for one tile, and fifteen tiles would be a quarter of a
-gigabyte in a single HTML file -- which no browser will open pleasantly and
-nobody will send anyone. The budget has to be spent somewhere else.
+Inlining every slice of every tile at full resolution would be 222 MB, which no
+browser opens pleasantly. Inlining almost nothing and relying on the all-in-focus
+projection was the other extreme, and it was wrong in a way that mattered: a
+Z-stack whose depth you cannot step through is not a Z-stack, and the one thing
+this modality actually measures is depth. Stepping down through the gel, watching
+each organoid sharpen at its own plane and blur again, *is* the evidence that the
+depths in the feature matrix are real.
 
-It is spent on the all-in-focus projections. A brightfield Z-stack of a dome is
-mostly out-of-focus haze: on any given slice a handful of organoids are crisp
-and the rest are grey discs. The projection is the one image where every
-organoid in that field is sharp at once, which is exactly the image someone
-wants when they are looking at a field and asking what is in it. Sixteen of them
--- one per tile, plus the assembled mosaic -- come to a few megabytes, and the
-per-slice scrub is kept as a coarse mosaic stack rather than dropped entirely.
+So the budget goes on the mosaic stack: every analysed slice, assembled and
+flat-fielded, at a width that keeps a 93-slice stack near thirteen megabytes. The
+per-tile projections stay as well, because when you switch to a single field and
+ask what is in it, the image you want is the one where everything is sharp at
+once.
 
-What is not compromised is the pairing. Every organoid drawn in 3D can be
-clicked and found in the photograph it was measured in, at the depth it was
-measured at, which is the only way any of these numbers can be checked.
+The same slice image is used for both panes -- the photograph on the left and
+the plane floating at its own depth inside the 3D volume on the right -- so the
+two cannot drift apart.
 """
 from __future__ import annotations
 
@@ -76,8 +77,25 @@ def _tile_projection(tile, slices, z_from: int, z_to: int, step: int = 3
     return np.clip(best_pixel, 0, 255).astype(np.uint8)
 
 
+_KEEP_REDUNDANT = ("radial_profile_um", "outlines_px", "z_extent_slices")
+"""Per-organoid fields dropped from the payload. `radial_profile_um` is the
+pixel profile times a constant, and at 48 angles for 844 organoids that constant
+costs a third of a megabyte to repeat."""
+
+
+def _trim(row: dict) -> dict:
+    out = {k: v for k, v in row.items() if k not in _KEEP_REDUNDANT}
+    profile = out.get("radial_profile_px")
+    if profile:
+        # The outline is what makes superposition on the photograph honest --
+        # a circle would draw a shape that was never measured -- but three
+        # decimals of a pixel is noise, and rounding halves the payload.
+        out["radial_profile_px"] = [round(float(v), 1) for v in profile]
+    return out
+
+
 def build(result, path: str | Path, quality: int = 78,
-          scrub_slices: int = 26, scrub_width: int = 1100,
+          slice_width: int = 850, slice_quality: int = 66,
           progress=None) -> Path:
     """Write the viewer for a finished mosaic run."""
     from . import __version__
@@ -93,7 +111,7 @@ def build(result, path: str | Path, quality: int = 78,
     fused = MosaicSlices(mosaic, flat, blend=True)
     z_stop = int(max(4, substrate - 3))
 
-    steps = len(mosaic) + 1 + scrub_slices
+    steps = len(mosaic) + 1 + z_stop
     done = 0
 
     tile_payload = []
@@ -119,11 +137,10 @@ def build(result, path: str | Path, quality: int = 78,
     if progress:
         progress(done, steps)
 
-    scrub = []
-    for z in np.linspace(0, z_stop - 1, scrub_slices).round().astype(int):
-        scrub.append({"z": int(z),
-                      "img": _jpeg_uri(fused.slice(int(z)), 66,
-                                       max_width=scrub_width)})
+    stack = []
+    for z in range(z_stop):
+        stack.append(_jpeg_uri(fused.slice(z), slice_quality,
+                               max_width=slice_width))
         done += 1
         if progress:
             progress(done, steps)
@@ -146,12 +163,13 @@ def build(result, path: str | Path, quality: int = 78,
             "n_sightings": result.report.n_sightings,
             "n_merged": result.report.n_merged,
             "dome": dome.to_dict() if dome is not None else None,
-            "scrub_width": scrub_width,
+            "z_analysed": z_stop,
+            "n_theta": len((result.rows[0].get("radial_profile_px") or [])) or None,
         },
         "tiles": tile_payload,
-        "organoids": result.rows,
+        "organoids": [_trim(r) for r in result.rows],
         "mosaic_edf": mosaic_edf,
-        "scrub": scrub,
+        "stack": stack,
     }
 
     html = _TEMPLATE.read_text(encoding="utf-8")
