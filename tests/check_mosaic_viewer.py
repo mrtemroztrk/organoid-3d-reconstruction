@@ -106,6 +106,16 @@ HARNESS = r"""
     ok(Math.abs(planeMesh.position.z - pz) > 1,
        `the photo plane moved with the slice (${pz.toFixed(0)} -> ${planeMesh.position.z.toFixed(0)})`);
     ok(Math.abs(clipPlane.constant - cc) > 1, "the clip plane moved with it too");
+    // which half survives matters: the deeper half, so a cross-section is left
+    // lying on the photograph rather than the photograph hidden behind it
+    ok(clipPlane.normal.z > 0 && clipPlane.constant < 0,
+       "clipping keeps the half deeper than the photograph");
+    {
+      const deep = new THREE.Vector3(0, 0, ZW(state.z) + 100);
+      const shallow = new THREE.Vector3(0, 0, ZW(state.z) - 100);
+      ok(clipPlane.distanceToPoint(deep) > 0 && clipPlane.distanceToPoint(shallow) < 0,
+         "a point below the plane is kept and one above it is cut");
+    }
     ok(Math.abs(planeMesh.position.z - ZW(state.z)) < 1e-6,
        "the plane sits at exactly the current slice's depth");
     setZ(z0);
@@ -138,6 +148,34 @@ HARNESS = r"""
         worst = Math.max(worst, Math.abs(d - M.dome.radius_px));
       }
       ok(worst < 1.0, `every cap vertex lies on the fitted sphere (worst ${worst.toFixed(2)} px)`);
+    }
+
+    // --- the photograph is mapped onto the plane the same way the outlines
+    // are drawn onto the 2D canvas, or the two panes disagree ---
+    // This is checked as geometry rather than by looking at rendered pixels,
+    // because a mirrored dome still looks like a dome and a statistical test on
+    // a nearly symmetric specimen cannot tell the difference reliably.
+    {
+      const g = planeMesh.geometry;
+      const pos = g.attributes.position, uv = g.attributes.uv;
+      let originIdx = -1, farIdx = -1;
+      for (let i = 0; i < uv.count; i++){
+        if (uv.getX(i) === 0 && uv.getY(i) === 0) originIdx = i;
+        if (uv.getX(i) === 1 && uv.getY(i) === 1) farIdx = i;
+      }
+      ok(originIdx >= 0 && farIdx >= 0, "the photo plane carries texture coordinates");
+      const o0 = new THREE.Vector3().fromBufferAttribute(pos, originIdx)
+                  .add(planeMesh.position);
+      const o1 = new THREE.Vector3().fromBufferAttribute(pos, farIdx)
+                  .add(planeMesh.position);
+      ok(planeTex.flipY === false,
+         "the texture is uploaded unflipped, so image row 0 is texture v = 0");
+      // flipY false means uv (0,0) samples the image's top-left, which must
+      // therefore sit at mosaic (0, 0)
+      ok(Math.abs(o0.x) < 1e-6 && Math.abs(o0.y) < 1e-6,
+         `uv (0,0) -- the image's top-left -- sits at mosaic (${o0.x.toFixed(1)}, ${o0.y.toFixed(1)})`);
+      ok(Math.abs(o1.x - M.width) < 1e-6 && Math.abs(o1.y - M.height) < 1e-6,
+         `uv (1,1) -- its bottom-right -- sits at mosaic (${o1.x.toFixed(0)}, ${o1.y.toFixed(0)}), the far corner`);
     }
 
     // --- navigation: the same control model as the single-field viewer ---

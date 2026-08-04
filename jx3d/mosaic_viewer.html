@@ -335,7 +335,13 @@ const key = new THREE.DirectionalLight(0xffffff, 0.75); key.position.set(0.6,-1,
 scene.add(key);
 
 const ZW = z => z * ANI;                          /* slice index -> world depth */
-const clipPlane = new THREE.Plane(new THREE.Vector3(0,0,-1), 0);
+/* Keeps the half of the scene where normal·p + constant > 0. With the normal
+   along +Z and the constant at minus the plane's depth, that is everything
+   *deeper* than the photograph, so an organoid straddling the plane is cut open
+   and its cross-section is left lying on the image it was measured from. The
+   opposite sign hides the photograph behind the very objects it is evidence
+   for. */
+const clipPlane = new THREE.Plane(new THREE.Vector3(0,0,1), 0);
 
 /* organoids */
 const sphere = new THREE.SphereGeometry(1, 16, 12);
@@ -419,10 +425,23 @@ if (M.dome){
 const planeTex = new THREE.Texture();
 planeTex.minFilter = THREE.LinearFilter;
 planeTex.generateMipmaps = false;
+/* Row 0 of the image is the top of the mosaic, and this scene's +Y runs the
+   same way -- downward -- so that an organoid's y in pixels is its y in the
+   volume. Three.js flips images on upload by default, which is right for a
+   scene with +Y up and exactly wrong here: it mirrored the photograph against
+   the reconstruction, so the models sat on the wrong organoids while the whole
+   thing still looked plausible because the droplet is nearly symmetric. */
+planeTex.flipY = false;
+planeTex.colorSpace = THREE.SRGBColorSpace;
+planeTex.magFilter = THREE.LinearFilter;
 const planeMesh = new THREE.Mesh(
   new THREE.PlaneGeometry(M.width, M.height),
-  new THREE.MeshBasicMaterial({map:planeTex, transparent:true, opacity:0.94,
-                               side:THREE.DoubleSide, depthWrite:false}));
+  /* toneMapped off, because this is a photograph and not a lit surface: letting
+     the renderer's tone curve touch it changes the grey values a viewer is
+     trying to compare against the panel on the left. */
+  new THREE.MeshBasicMaterial({map:planeTex, color:0xffffff, transparent:true,
+                               opacity:0.94, side:THREE.DoubleSide,
+                               depthWrite:false, toneMapped:false}));
 planeMesh.position.set(M.width/2, M.height/2, 0);
 scene.add(planeMesh);
 let planeSrc = null;
@@ -527,12 +546,10 @@ function draw3d(){
     m.material.color.set(sel ? 0xffffff : (o._css || "#5b6478"));
     m.material.emissive.set(sel ? 0x444444 : 0x000000);
   }
-  /* Keep the half of the scene deeper than the photograph, so the plane reads
-     as a cut through the volume rather than a card floating in front of it.
-     Switching clipping off moves the plane out of the way rather than removing
+  /* Switching clipping off pushes the plane out of range rather than removing
      it from the materials: adding or removing a clipping plane changes the
      shader, and every organoid's material would be recompiled on a toggle. */
-  clipPlane.constant = state.clip ? ZW(state.z) : 1e9;
+  clipPlane.constant = state.clip ? -ZW(state.z) : 1e9;
   if (domeGroup) domeGroup.visible = state.showDome;
   updatePlane();
   updateLine3d();
