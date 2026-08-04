@@ -176,6 +176,47 @@ HARNESS = r"""
       state.showModels = true; draw3d();
       ok([...meshes.values()].some(m => m.visible), "and they come back");
     }
+
+    // --- each field of view can be shown as the box it really occupies ---
+    // A field is a rectangle in x and y imaged through the whole depth, so in
+    // 3D it is a box. The test that matters is that the boxes follow the field
+    // buttons: showing a wall for a field that is switched off would claim
+    // coverage the user has just excluded.
+    {
+      const wallCount = () => wallGroup.children.length;
+      state.walls = false; updateWalls();
+      ok(wallCount() === 0, "no walls until they are asked for");
+
+      state.walls = true; state.wallFaces = false; updateWalls();
+      const nOn = state.fovs.size;
+      ok(wallCount() === nOn,
+         `one wireframe box per shown field (${wallCount()} for ${nOn} fields)`);
+
+      state.wallFaces = true; updateWalls();
+      ok(wallCount() === 2 * nOn, "shading adds a face mesh to each box");
+      ok(wallGroup.children.every(c => !c.material.depthWrite ||
+                                       c.type === "LineSegments"),
+         "the shaded sides do not write depth, so they tint what is behind "
+         + "them instead of erasing it");
+
+      const keep = new Set(state.fovs);
+      state.fovs = new Set([TILES[0].index]); updateWalls();
+      ok(wallCount() === 2, "switching fields off removes their walls");
+
+      // and the box has to sit on the field it belongs to
+      const box = new THREE.Box3().setFromObject(wallGroup.children[0]);
+      const t0 = TILES[0];
+      ok(Math.abs(box.min.x - t0.x0) < 1e-3 &&
+         Math.abs(box.max.x - (t0.x0 + t0.w)) < 1e-3 &&
+         Math.abs(box.min.y - t0.y0) < 1e-3 &&
+         Math.abs(box.max.y - (t0.y0 + t0.h)) < 1e-3,
+         `the box covers exactly field ${t0.index}'s footprint`);
+      ok(box.max.z > box.min.z,
+         "and is extruded through the depth rather than being flat");
+
+      state.fovs = keep; state.walls = false; updateWalls();
+      ok(wallCount() === 0, "and they clear again when switched off");
+    }
     ok(Math.abs(planeMesh.position.z - ZW(state.z)) < 1e-6,
        "the plane sits at exactly the current slice's depth");
     setZ(z0);
