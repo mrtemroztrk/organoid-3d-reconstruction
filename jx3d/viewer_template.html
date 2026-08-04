@@ -145,6 +145,14 @@ body.present .btn{font-size:16px;padding:9px 16px}
 body.present #present-hud{display:block}
 #present-hud .big{font-size:26px;font-weight:700;letter-spacing:-.02em}
 #present-hud .sub{font-size:14px;color:var(--muted);margin-top:2px}
+#perfhud{
+  position:absolute;top:44px;right:12px;z-index:9;display:none;
+  background:rgba(10,13,20,.92);border:1px solid var(--line);border-radius:6px;
+  padding:8px 11px;font:11px ui-monospace,SFMono-Regular,Menlo,monospace;
+  color:var(--muted);white-space:pre;line-height:1.5;
+}
+#perfhud b{color:var(--fg)}
+#perfhud .bad{color:var(--bad)}
 #preload{
   position:absolute;bottom:12px;right:14px;z-index:8;
   background:rgba(17,23,37,.92);border:1px solid var(--line);border-radius:7px;
@@ -178,6 +186,7 @@ body.present #present-hud{display:block}
     <div id="present-hud"><div class="big" id="hud-title"></div>
       <div class="sub" id="hud-sub"></div></div>
     <button id="preload" title="Decode every slice up front so playback never stutters">Preload slices</button>
+    <div id="perfhud"></div>
     <div class="pane-hint">Wheel: zoom · Drag: pan · Click: select organoid · ← → : slice</div>
     <div class="tools">
       <button id="tg-focus" class="on" title="Measured outline of organoids whose focal plane is this slice">In focus</button>
@@ -192,7 +201,7 @@ body.present #present-hud{display:block}
   <section class="pane" id="pane3d">
     <canvas id="c3d"></canvas>
     <div class="pane-label">3D reconstruction</div>
-    <div class="pane-hint">Left drag: rotate · Right drag: pan · Wheel: zoom · Click: select &nbsp;|&nbsp; <b>S</b>: slice mode · <b>P</b>: photo plane · <b>T</b>: top view · <b>2</b>: fullscreen 3D</div>
+    <div class="pane-hint">Left drag: rotate · Right drag: pan · Wheel: zoom · Click: select &nbsp;|&nbsp; <b>S</b>: slice mode · <b>P</b>: photo plane · <b>T</b>: top view · <b>2</b>: fullscreen 3D · <b>I</b>: performance</div>
     <div class="tools">
       <button id="tg-photo" class="on" title="Show the raw slice as a textured plane inside the 3D scene (P)">Photo plane</button>
       <button id="tg-clip" title="Slicer: clip everything above the plane so organoid cross-sections sit on the photo (S)">Slice mode</button>
@@ -305,7 +314,7 @@ const state = {
   hover: null,
   showFocus: true, showCross: true, showId: false, rawOnly: false,
   showPhoto: true, showBox: true, showDome: true, clip: false,
-  present: false, playMs: 70,
+  present: false, playMs: 70, showPerf: false,
   minDiam: 0, minFocus: 0.25,
   colorMode: "depth",
   playing: false,
@@ -595,18 +604,24 @@ scene.add(boxGroup);
 /* --- organoid meshes --- */
 const meshes = new Map();
 const pickables = [];
+/* The 2D overlay uses the full measured outline; the 3D scene does not need it.
+   Halving both angular resolutions takes the scene from ~220k triangles to
+   ~55k, invisible at these object sizes and the difference between smooth and
+   unusable when the browser has no hardware WebGL. */
+const STEP_T = NTHETA >= 32 ? 2 : 1;
 function buildSpheroid(o, nPhi){
-  const nT = NTHETA;
+  const nT = Math.ceil(NTHETA / STEP_T);
   const pos = [], idx = [], nrm = [];
   for (let i = 0; i < nPhi; i++){
     const phi = Math.PI * i / (nPhi - 1);
     const sp = Math.sin(phi), cp = Math.cos(phi);
     for (let j = 0; j < nT; j++){
-      const r = o.radial_profile_px[j];
+      const k = j * STEP_T;
+      const r = o.radial_profile_px[k];
       const rz = o.radius_z_slices * ANISO;
-      pos.push(r * sp * COS[j], r * sp * SIN[j], rz * cp);
-      const n = new THREE.Vector3(sp * COS[j] / Math.max(r, 1e-6),
-                                  sp * SIN[j] / Math.max(r, 1e-6),
+      pos.push(r * sp * COS[k], r * sp * SIN[k], rz * cp);
+      const n = new THREE.Vector3(sp * COS[k] / Math.max(r, 1e-6),
+                                  sp * SIN[k] / Math.max(r, 1e-6),
                                   cp / Math.max(rz, 1e-6)).normalize();
       nrm.push(n.x, n.y, n.z);
     }
@@ -625,9 +640,12 @@ function buildSpheroid(o, nPhi){
   return geo;
 }
 for (const o of ORG){
-  const mat = new THREE.MeshPhongMaterial({ color: 0xffffff, shininess: 42, specular: 0x223344,
-                                            transparent: true, opacity: 0.94 });
-  const mesh = new THREE.Mesh(buildSpheroid(o, M.n_phi), mat);
+  // Opaque by default. Transparency costs a per-frame depth sort and gives up
+  // early-z for all 99 objects, and at 0.94 opacity it bought nothing. It is
+  // switched on only while a selection is dimming the others.
+  const mat = new THREE.MeshPhongMaterial({ color: 0xffffff, shininess: 42,
+                                            specular: 0x223344 });
+  const mesh = new THREE.Mesh(buildSpheroid(o, Math.max(8, Math.round(M.n_phi / 2))), mat);
   mesh.position.set(o.x_px, o.y_px, o.z_slice * ANISO);
   mesh.userData.oid = o.oid;
   scene.add(mesh);
@@ -839,7 +857,12 @@ function updateMeshes(){
     const c = ramp(colorValue(o));
     m.material.color.setRGB(c[0]/255, c[1]/255, c[2]/255);
     m.material.emissive.setHex(sel ? 0x6688aa : 0x000000);
-    m.material.opacity = !anySel ? 0.94 : (sel ? 1.0 : 0.12);
+    const wantTransparent = anySel && !sel;
+    if (m.material.transparent !== wantTransparent){
+      m.material.transparent = wantTransparent;
+      m.material.needsUpdate = true;
+    }
+    m.material.opacity = wantTransparent ? 0.12 : 1.0;
   }
   boxGroup.visible = state.showBox;
 
@@ -1086,6 +1109,12 @@ function tick(t){
   }
   if (dirty2d){ dirty2d = false; _draw2d(); }
   if (dirty3d){ dirty3d = false; _render3d(); }
+  fpsFrames++;
+  if (t - fpsSince > 500){
+    fpsValue = fpsFrames * 1000 / (t - fpsSince);
+    fpsFrames = 0; fpsSince = t;
+    if (state.showPerf) updatePerfHud();
+  }
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
@@ -1101,6 +1130,7 @@ window.addEventListener("keydown", e => {
   if (e.key === "p" || e.key === "P") document.getElementById("tg-photo").click();
   if (e.key === "t" || e.key === "T") document.getElementById("btn-top").click();
   if (e.key === "d" || e.key === "D") document.getElementById("tg-dome").click();
+  if (e.key === "i" || e.key === "I"){ state.showPerf = !state.showPerf; updatePerfHud(); render3d(); }
   if (e.key === "f" || e.key === "F") setPresent(!state.present);
   if (e.key === "1") setLayout("lay-split");
   if (e.key === "2") setLayout("lay-3d");
@@ -1174,6 +1204,37 @@ document.getElementById("colormap").onchange = e => {
   drawDepthChart(); draw2d(); render3d();
 };
 document.getElementById("sortmode").onchange = renderList;
+
+/* ===================== performance readout ===================== */
+/* Whether WebGL is hardware accelerated is the single thing that decides if
+   this view is usable, and it is invisible from the page itself unless you ask.
+   A software rasteriser (llvmpipe, SwiftShader) will show up here, and so will
+   the frame time it costs. */
+let fpsFrames = 0, fpsSince = 0, fpsValue = 0;
+function gpuName(){
+  try {
+    const gl = renderer.getContext();
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    return dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)
+               : gl.getParameter(gl.RENDERER);
+  } catch(e){ return "unknown"; }
+}
+const SOFTWARE = /llvmpipe|swiftshader|softpipe|software|mesa offscreen/i;
+function updatePerfHud(){
+  const el = document.getElementById("perfhud");
+  if (!state.showPerf){ el.style.display = "none"; return; }
+  const name = gpuName();
+  const soft = SOFTWARE.test(name);
+  const tris = [...meshes.values()].reduce((s, m) =>
+      s + (m.geometry.index ? m.geometry.index.count / 3 : 0), 0);
+  el.style.display = "block";
+  el.innerHTML =
+    `renderer <b>${name}</b>\n` +
+    (soft ? `<span class="bad">software rasteriser — no GPU acceleration</span>\n` : "") +
+    `frame <b>${fpsValue.toFixed(0)} fps</b>   draw calls <b>${renderer.info.render.calls}</b>\n` +
+    `triangles <b>${Math.round(tris / 1000)}k</b>   objects <b>${meshes.size}</b>\n` +
+    `slices decoded <b>${warmed.size}</b> / ${M.depth}`;
+}
 
 /* ===================== presentation mode ===================== */
 /* Strips the page down to the two viewports and the Z control, goes
