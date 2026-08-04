@@ -332,13 +332,20 @@ def read_stage_location(tif_path: str | Path) -> tuple[int, int, int] | None:
 
 
 def read_edge_points(folder: str | Path) -> list[tuple[int, int, int]]:
-    """Stage points the operator clicked to outline the region to scan.
+    """Stage points the operator drove to when setting up the scan.
 
-    A "specify edge points" scan is set up by driving the stage to a few places
-    on the rim of the specimen; the instrument then covers their bounding
-    region with tiles. Those clicks are an independent, human-supplied estimate
-    of where the droplet ends, which is worth having as a check on a fitted
-    dome that was derived from the pixels alone.
+    These are the requested bounds of the tiled region, expressed as where the
+    outermost tiles should be *centred*, and the instrument then rounds the grid
+    up to whole tiles. On this dataset that reading checks out to within a
+    pixel: the first tile centre lands 0.4 px from the first recorded point, and
+    the last overshoots by 17 px across and 422 px down, which is exactly the
+    slack from rounding 1.97 columns up to 3 and 3.17 rows up to 5.
+
+    It is tempting to treat them as the operator's opinion of where the droplet
+    ends, and so as an independent check on a fitted dome. They are not, and the
+    numbers say so plainly: they sit a millimetre inside the fitted contact
+    circle, and their stage Z is the depth of slice 60 rather than of the glass.
+    They describe the region someone asked the microscope to cover, nothing more.
 
     Unused slots are stored as all-zero and are dropped here.
     """
