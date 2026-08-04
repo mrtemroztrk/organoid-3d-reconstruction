@@ -175,7 +175,7 @@ def run(dataset: str | Path, outdir: str | Path, params: Params | None = None,
         calibration: dict | None = None,
         build_viewer: bool = True) -> MosaicResult:
     """The whole mosaic analysis, from tile folders to a feature matrix."""
-    params = params or Params(mode="both", fit_dome=False)
+    params = params or Params(mode="edf", fit_dome=False)
     dataset, outdir = Path(dataset), Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     started = time.time()

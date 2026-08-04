@@ -30,14 +30,16 @@ def main(argv=None) -> int:
                    help="output folder (default: output/<dataset name>_mosaic)")
 
     g = p.add_argument_group("segmentation")
-    g.add_argument("--mode", choices=["both", "edf", "slices"], default="both",
-                   help="both = the union of a pass on each field's all-in-focus "
-                        "projection and a per-slice pass linked through Z; this "
-                        "is the default because only the per-slice pass measures "
-                        "an outline on the plane where that organoid is actually "
-                        "in focus, and the projection merges objects that overlap "
-                        "at different depths. edf = the projection alone, about "
-                        "twenty times faster and good enough for a first look")
+    g.add_argument("--mode", choices=["both", "edf", "slices"], default="edf",
+                   help="edf = one pass on each field's all-in-focus projection. "
+                        "both = that plus a per-slice pass linked through Z, "
+                        "which costs about twenty times more segmenter calls -- "
+                        "roughly four hours for fifteen fields on a 4 GB GPU -- "
+                        "and was measured on this dataset to add 6%% more objects "
+                        "while leaving the outlines essentially unchanged, "
+                        "because where both passes find an object the merge keeps "
+                        "whichever has the sharper focus peak and the projection "
+                        "almost always wins")
     g.add_argument("--detector", choices=["cellpose", "classical"],
                    default="cellpose")
     g.add_argument("--diameter", type=float, default=40.0, help="pixels")

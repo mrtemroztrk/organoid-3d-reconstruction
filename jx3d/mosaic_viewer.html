@@ -81,6 +81,7 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 13px
   <button id="b-build">Build up</button>
   <button id="b-line">Border line</button>
   <div class="meta" id="hcount"></div>
+  <div class="meta" id="hbuild" style="opacity:.65"></div>
 </header>
 <main>
   <div class="pane" id="p2d">
@@ -952,6 +953,11 @@ document.getElementById("hmeta").textContent =
   + ` · offsets ${M.offset_source}, residual ${M.registration_residual_px} px`;
 document.getElementById("hcount").textContent =
   `${ORG.length} organoids from ${M.n_sightings} sightings`;
+document.getElementById("hbuild").textContent =
+  `v${M.version} · built ${M.built_utc || "unknown"}`;
+document.getElementById("hbuild").title =
+  `template ${M.viewer_version}. If this build is older than a change you are ` +
+  `looking for, the page is stale -- rebuild it.`;
 
 recolour(); refresh(); resize(); setZ(state.z);
 

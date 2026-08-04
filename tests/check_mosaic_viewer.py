@@ -32,6 +32,14 @@ HARNESS = r"""
 
   try {
     ok(ORG.length > 0, `${ORG.length} organoids loaded`);
+    // A generated page is a frozen copy of the template and cannot be told
+    // apart from a stale one by looking at it, so it has to say which build it
+    // is. A viewer several fixes behind was once the file on disk while the
+    // fixes sat in git, and nothing on screen gave it away.
+    ok(!!M.built_utc && /\d{4}-\d{2}-\d{2}/.test(M.built_utc),
+       `the page states when it was built (${M.built_utc})`);
+    ok(document.getElementById("hbuild").textContent.includes(M.version),
+       `and shows it in the header (${document.getElementById("hbuild").textContent})`);
     ok(TILES.length === M.n_rows * M.n_cols,
        `${TILES.length} fields, matching the ${M.n_rows}x${M.n_cols} grid`);
 

@@ -36,6 +36,20 @@ def template_version() -> str:
     return hashlib.sha256(_TEMPLATE.read_bytes()).hexdigest()[:12]
 
 
+def _now_utc() -> str:
+    """When this viewer was generated.
+
+    A generated page is a frozen copy of the template, and there is no way to
+    tell a stale one apart by looking at it -- which is exactly how a viewer
+    several fixes behind ended up being the one on disk while the fixes sat in
+    git. Stamping the build makes that visible at a glance instead of after an
+    hour of wondering why a change did not appear.
+    """
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
 def _jpeg_uri(image: np.ndarray, quality: int = 78,
               max_width: int | None = None) -> str:
     import cv2
@@ -184,6 +198,7 @@ def build(result, path: str | Path, quality: int = 70,
             "n_sightings": result.report.n_sightings,
             "n_merged": result.report.n_merged,
             "dome": dome.to_dict() if dome is not None else None,
+            "built_utc": _now_utc(),
             "z_analysed": z_stop,
             "z_total": tiles.depth,
             "n_theta": len((result.rows[0].get("radial_profile_px") or [])) or None,
