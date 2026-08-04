@@ -120,15 +120,26 @@ HARNESS = r"""
     ok(Math.abs(planeMesh.position.z - pz) > 1,
        `the photo plane moved with the slice (${pz.toFixed(0)} -> ${planeMesh.position.z.toFixed(0)})`);
     ok(Math.abs(clipPlane.constant - cc) > 1, "the clip plane moved with it too");
-    // which half survives matters: the deeper half, so a cross-section is left
-    // lying on the photograph rather than the photograph hidden behind it
-    ok(clipPlane.normal.z > 0 && clipPlane.constant < 0,
-       "clipping keeps the half deeper than the photograph");
+    // Which side survives is the user's choice, so all three have to work.
     {
-      const deep = new THREE.Vector3(0, 0, ZW(state.z) + 100);
-      const shallow = new THREE.Vector3(0, 0, ZW(state.z) - 100);
-      ok(clipPlane.distanceToPoint(deep) > 0 && clipPlane.distanceToPoint(shallow) < 0,
-         "a point below the plane is kept and one above it is cut");
+      const deep = () => new THREE.Vector3(0, 0, ZW(state.z) + 100);
+      const shallow = () => new THREE.Vector3(0, 0, ZW(state.z) - 100);
+      state.clip = "above"; draw3d();
+      ok(clipPlane.distanceToPoint(shallow()) > 0 &&
+         clipPlane.distanceToPoint(deep()) < 0,
+         "'above' keeps what lies between the objective and the slice");
+      state.clip = "below"; draw3d();
+      ok(clipPlane.distanceToPoint(deep()) > 0 &&
+         clipPlane.distanceToPoint(shallow()) < 0,
+         "'below' keeps the deeper half, cut open at the slice");
+      state.clip = "both"; draw3d();
+      ok(clipPlane.distanceToPoint(deep()) > 0 &&
+         clipPlane.distanceToPoint(shallow()) > 0,
+         "'both' cuts nothing");
+      ok([...meshes.values()].every(m => m.material.clippingPlanes &&
+                                        m.material.clippingPlanes.length === 1),
+         "and no material gains or loses a clipping plane, so nothing recompiles");
+      state.clip = "above"; draw3d();
     }
     ok(Math.abs(planeMesh.position.z - ZW(state.z)) < 1e-6,
        "the plane sits at exactly the current slice's depth");

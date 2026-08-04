@@ -240,6 +240,14 @@ file from the organoid.
 ./.venv/bin/python run_mosaic.py BK52_WT_9805_B
 ```
 
+![stitching](docs/stitching.png)
+
+*How fifteen photographs become one. A single field holds about a ninth of the
+droplet; the fields overlap by 29 %, and the strips two of them both
+photographed are what the placement is measured from. Once the illumination is
+flattened and the seams feathered, the joins are gone — which is why the
+finished mosaic is the one figure where none of the work shows.*
+
 ![mosaic assembly](docs/mosaic_assembly.gif)
 
 *The fifteen fields arriving in the order the stage visited them. The numbering
@@ -586,7 +594,8 @@ A whole-dome run (`run_mosaic.py`) writes:
 
 | file | what |
 |---|---|
-| `features.csv` | **the feature matrix** — one row per organoid, 139 columns |
+| `features.csv` | **the feature matrix** — one row per organoid, 28 columns chosen to be read |
+| `features_all.csv` | the same rows with all 139 columns, for model training |
 | `views.csv` | every sighting, including the ones not elected; a repeat measurement of the same organoid is an error bar, not a discard |
 | `viewer.html` | **single file**, ~22 MB: the whole stack, all fifteen fields switchable, with the feature table |
 | `mosaic.json` | tile geometry, registration residuals, dome fit, merge report, provenance |

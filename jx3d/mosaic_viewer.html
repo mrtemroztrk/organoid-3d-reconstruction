@@ -76,7 +76,7 @@ footer{background:var(--panel);border-top:1px solid var(--line);padding:6px 13px
   <div class="meta" id="hmeta"></div>
   <div class="spacer"></div>
   <button id="b-plane" class="on">Photo in 3D</button>
-  <button id="b-clip" class="on">Clip at slice</button>
+  <span class="meta">show</span><span id="clipmodes" class="toggles"></span>
   <button id="b-dome" class="on">Dome</button>
   <button id="b-build">Build up</button>
   <button id="b-line">Border line</button>
@@ -162,7 +162,7 @@ const state = {
   mode: "slice",            /* slice | edf */
   outline: 0.90, fill: 0.0, window: 4, allDepths: false,
   borders: true, labels: false,
-  showPlane: true, clip: true, showDome: true, showLine: false,
+  showPlane: true, clip: "above", showDome: true, showLine: false,
   buildUp: false,
   colour: "depth", playing: false,
 };
@@ -415,13 +415,27 @@ const key = new THREE.DirectionalLight(0xffffff, 0.75); key.position.set(0.6,-1,
 scene.add(key);
 
 const ZW = z => z * ANI;                          /* slice index -> world depth */
-/* Keeps the half of the scene where normal·p + constant > 0. With the normal
-   along +Z and the constant at minus the plane's depth, that is everything
-   *deeper* than the photograph, so an organoid straddling the plane is cut open
-   and its cross-section is left lying on the image it was measured from. The
-   opposite sign hides the photograph behind the very objects it is evidence
-   for. */
+/* Which side of the photograph to keep.
+
+   Depth increases downward into the gel, so "above" is everything shallower
+   than the current slice -- the organoids between the objective and the plane,
+   which is what you are looking past to see the photograph and usually what a
+   person means by wanting to see the ones on top of it. "below" keeps the
+   deeper half instead, so an organoid straddling the plane is cut open and its
+   cross-section lies on the image. "both" clips nothing.
+
+   Keeping only one plane object and moving it, rather than adding and removing
+   it, is deliberate: adding or removing a clipping plane changes the shader,
+   and every organoid's material would be recompiled on a toggle. */
 const clipPlane = new THREE.Plane(new THREE.Vector3(0,0,1), 0);
+const CLIP_MODES = {
+  above: {label:"Above the photo",  normal:[0,0,-1],
+          note:"organoids between the objective and this slice"},
+  below: {label:"Below the photo",  normal:[0,0,1],
+          note:"organoids deeper than this slice, cut open at it"},
+  both:  {label:"Both",             normal:null,
+          note:"the whole reconstruction, uncut"},
+};
 
 /* organoids */
 const sphere = new THREE.SphereGeometry(1, 16, 12);
@@ -659,10 +673,13 @@ function draw3d(){
     m.material.color.set(sel ? 0xffffff : (o._css || "#5b6478"));
     m.material.emissive.set(sel ? 0x444444 : 0x000000);
   }
-  /* Switching clipping off pushes the plane out of range rather than removing
-     it from the materials: adding or removing a clipping plane changes the
-     shader, and every organoid's material would be recompiled on a toggle. */
-  clipPlane.constant = state.clip ? -ZW(state.z) : 1e9;
+  const mode = CLIP_MODES[state.clip] || CLIP_MODES.both;
+  if (mode.normal){
+    clipPlane.normal.set(mode.normal[0], mode.normal[1], mode.normal[2]);
+    clipPlane.constant = -mode.normal[2] * ZW(state.z);
+  } else {
+    clipPlane.constant = 1e9;          /* out of range: nothing is cut */
+  }
   if (domeGroup) domeGroup.visible = state.showDome;
   updatePlane();
   updateLine3d();
@@ -746,6 +763,18 @@ function renderFovs(){
   document.getElementById("fovnote").textContent =
     `Click to toggle, shift-click for that field alone. ${state.fovs.size} of ${TILES.length} shown.`;
 }
+function renderClip(){
+  const box = document.getElementById("clipmodes");
+  box.innerHTML = "";
+  for (const [k, v] of Object.entries(CLIP_MODES)){
+    const b = document.createElement("button");
+    b.textContent = v.label; b.title = v.note;
+    b.className = state.clip === k ? "on" : "";
+    b.onclick = () => { state.clip = k; renderClip(); dirty3 = true; };
+    box.appendChild(b);
+  }
+}
+
 function renderModes(){
   const box = document.getElementById("imgmode"); box.innerHTML = "";
   for (const [k, lab] of [["slice","Raw slice"],["edf","All-in-focus"]]){
@@ -786,8 +815,8 @@ function renderStats(){
 
 /* ==================================================================== glue */
 function select(o){ state.selected = o; renderDetail(); dirty2 = dirty3 = true; }
-function refresh(){ renderFovs(); renderModes(); renderColours(); renderStats();
-                    dirty2 = dirty3 = true; }
+function refresh(){ renderFovs(); renderModes(); renderColours(); renderClip();
+                    renderStats(); dirty2 = dirty3 = true; }
 function setZ(z){
   state.z = Math.max(0, Math.min(NZ - 1, z|0));
   document.getElementById("zslider").value = state.z;
@@ -900,7 +929,6 @@ toggle("b-dome",   () => state.showDome,  v => state.showDome = v);
 toggle("b-line",   () => state.showLine,  v => state.showLine = v);
 toggle("b-build",  () => state.buildUp,   v => { state.buildUp = v; renderStats(); });
 toggle("b-plane",  () => state.showPlane, v => state.showPlane = v);
-toggle("b-clip",   () => state.clip,      v => state.clip = v);
 toggle("b-borders",() => state.borders,   v => state.borders = v);
 toggle("b-labels", () => state.labels,    v => state.labels = v);
 toggle("b-all-depths", () => state.allDepths, v => { state.allDepths = v; renderStats(); });

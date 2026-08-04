@@ -280,25 +280,39 @@ def _write(rows: list[dict], organoids, mosaic, registration, fit, report,
     """Write the feature matrix and everything needed to interpret it."""
     from . import __version__
 
-    columns: list[str] = []
+    every: list[str] = []
     for row in rows:
         for key in row:
-            if key not in columns:
-                columns.append(key)
+            if key not in every:
+                every.append(key)
     # Keep the identity and provenance columns first: a matrix whose first
     # column is a texture descriptor invites someone to load it without ever
     # noticing which tile a row came from or whether it was clipped.
     lead = ["uid", "tile", "tile_row", "tile_col", "x_mosaic_px", "y_mosaic_px",
             "z_slice", "n_views", "views", "coverage_k", "clipped",
             "clipped_everywhere", "appearance_measurable"]
-    columns = [c for c in lead if c in columns] + [c for c in columns if c not in lead]
+    every = [c for c in lead if c in every] + [c for c in every if c not in lead]
 
-    path = outdir / "features.csv"
-    with path.open("w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=columns, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
-    _log(f"  features.csv     ({len(rows)} organoids x {len(columns)} columns)")
+    # The matrix a person opens carries the columns a person reads. The other
+    # hundred and twelve are texture bins and percentiles that exist because
+    # they were cheap to compute; they are still measured and still written
+    # alongside, but handing them to a biologist who wants to know which
+    # organoids are dying is handing them a haystack.
+    curated = [c for c in featuremod.VIABILITY_COLUMN_NAMES if c in every]
+
+    def dump(path: Path, cols: list[str]) -> None:
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+
+    dump(outdir / "features.csv", curated)
+    dump(outdir / "features_all.csv", every)
+    _log(f"  features.csv     ({len(rows)} organoids x {len(curated)} columns "
+         f"chosen for reading -- see features.py::VIABILITY_COLUMNS for why "
+         f"each one is there)")
+    _log(f"  features_all.csv (the same rows with all {len(every)} columns, for "
+         f"model training)")
 
     n_views = 0
     with (outdir / "views.csv").open("w", newline="", encoding="utf-8") as fh:

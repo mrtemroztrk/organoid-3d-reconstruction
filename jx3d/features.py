@@ -429,6 +429,15 @@ def morphology_features(radial_profile_px, area_px2: float,
         hull = ConvexHull(points)
         out["solidity"] = float(area / max(hull.volume, 1e-9))
         out["convexity"] = float(hull.area / max(perimeter, 1e-9))
+        # An organoid is convex at this scale, so a deep notch in its outline is
+        # a segmentation failure and not a shape. The commonest one here is a
+        # wedge bitten out of an otherwise round object, which leaves solidity
+        # well below one while circularity still looks respectable. It is
+        # flagged rather than repaired: filling the notch with the convex hull
+        # would draw a boundary the microscope never showed, and every feature
+        # measured inside it would then be measured partly on invented pixels.
+        out["shape_suspect"] = float(out["solidity"] < 0.93 or
+                                     out["radius_cv"] > 0.22)
     except Exception:
         # A degenerate outline has no hull. Reporting nothing is right; a
         # solidity of 1.0 would read as a perfectly convex object.
@@ -551,3 +560,94 @@ def measure(image: np.ndarray, x_px: float, y_px: float, radius_px: float,
         "halo_lost_to_neighbours_px": float(regions.halo_lost_to_neighbours),
     })
     return row
+
+
+# --------------------------------------------------------------------------- #
+# what a person actually reads
+# --------------------------------------------------------------------------- #
+
+VIABILITY_COLUMNS: list[tuple[str, str]] = [
+    # --- which organoid, and can this row be trusted at all ---
+    ("uid", "identity in this dataset"),
+    ("tile", "which field it was measured in"),
+    ("x_mosaic_px", "position in the assembled dome"),
+    ("y_mosaic_px", "position in the assembled dome"),
+    ("z_slice", "depth of its focal plane, in slices"),
+    ("appearance_measurable", "0 when the object was too small or too close to a "
+                              "frame edge for the core/rim decomposition; every "
+                              "appearance column below is missing on those rows"),
+    ("background_clipped_frac", "fraction of the local background sitting at 255. "
+                                "Where this is high the background is a lower "
+                                "bound rather than a measurement, and every "
+                                "optical density derived from it is soft"),
+    ("focus_sharpness", "prominence of the rim's focus peak, 0-1. Low values are "
+                        "objects that never came properly into focus"),
+    ("clipped", "the outline touches its field's edge, so shape and texture "
+                "describe the cut and not the organoid"),
+
+    # --- the viability construct itself ---
+    ("rim_minus_core_od", "optical density of the rim minus the core. A live "
+                          "cystic organoid is a fluid-filled sphere with a thin "
+                          "refractile shell, so its centre is empty and its rim "
+                          "is dense and this is large and positive. As it dies "
+                          "the lumen fills with debris, the centre darkens, and "
+                          "this collapses towards zero. The single most direct "
+                          "expression of viability this modality offers"),
+    ("core_rim_separation", "the same difference divided by the scatter within "
+                            "the two regions, so it says whether core and rim "
+                            "are genuinely different populations of pixels or "
+                            "merely different on average"),
+    ("core_fill_fraction", "fraction of the core as dense as the rim: how full "
+                           "the lumen has become"),
+    ("core_od_mean", "how absorbing the interior is"),
+    ("core_od_std", "how uneven it is. A smooth lumen is uniform; a necrotic one "
+                    "is not"),
+    ("core_od_entropy", "granularity of the interior, as information content"),
+    ("core_glcm_contrast_d2", "local texture contrast inside the core. Debris "
+                              "gives a grainy interior and raises this"),
+    ("core_glcm_homogeneity_d2", "the counterpart: high for a smooth lumen"),
+    ("rim_od_mean", "how dense the shell is"),
+    ("rim_over_core_grad", "how much sharper the boundary is than the interior. "
+                           "A live organoid has a crisp refractile edge around a "
+                           "featureless middle; a dying one loses the contrast"),
+
+    # --- shape, which changes as an organoid degenerates ---
+    ("diameter_um", "equatorial diameter"),
+    ("circularity", "4*pi*A/P^2. Healthy cysts are round; collapsing ones are not"),
+    ("solidity", "outline area over its convex hull: how lobed or dented it is"),
+    ("radius_cv", "variation of the radius around the outline, a scale-free "
+                  "measure of how irregular the boundary is"),
+    ("shape_suspect", "the outline has a notch or a raggedness an organoid does "
+                      "not have, so the segmenter probably cut into it or merged "
+                      "it with a neighbour. Affects a small minority -- two of a "
+                      "hundred and twenty-six on the field this was measured on "
+                      "-- and those rows should be dropped before any shape or "
+                      "texture comparison"),
+
+    # --- where it sits, which is a real biological variable ---
+    ("nearest_border_px", "distance from the organoid's surface to the nearest "
+                          "gel boundary. Nutrient access, oxygen and mechanical "
+                          "confinement all depend on it"),
+    ("dome_radial_frac", "how far out in the droplet it sits, 0 at the axis and "
+                         "1 at the rim"),
+    ("height_above_glass_slices", "how far above the well bottom"),
+    ("nn_gap_px", "clear distance to the nearest neighbouring organoid"),
+]
+"""The columns a person is meant to read.
+
+The full matrix runs to a hundred and thirty-nine columns and most of them are
+there because they were cheap to compute, not because anyone would look at them:
+five co-occurrence descriptors at three distances each, ten local-binary-pattern
+bins, percentiles of three regions. That is a fine input to a model and a poor
+thing to hand a biologist who wants to know which organoids are dying.
+
+So this is the default, and nothing is thrown away -- the rest is still computed
+and still written when it is asked for, because a classifier may well find
+signal in a texture bin no human would have picked. What changes is which one
+you get without asking.
+
+Every entry carries the reason it earned its place. A column that cannot be
+justified in a sentence does not belong in a matrix meant for reading.
+"""
+
+VIABILITY_COLUMN_NAMES = [name for name, _ in VIABILITY_COLUMNS]
